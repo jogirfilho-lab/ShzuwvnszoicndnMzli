@@ -1,196 +1,1814 @@
-name: Build IPA connected to Railway API
-
-
-
-on:
-
-  workflow_dispatch:
-  
-  push:
-  
-    branches: [main]
-    
-
-
 permissions:
+  contents: write
 
-  contents: read
-  
-
-
-jobs:
-
-  build:
-  
-    runs-on: macos-latest
-    
+name: 3105 - Nubank Build Without API
+on: [push, workflow_dispatch]
+jobs: 
+  build: 
+    runs-on: macos-latest 
     steps:
-    
-      - name: Checkout
-      
-        uses: actions/checkout@v4
-        
-
-
-      - name: Extract iOS project
-      
+      - uses: actions/checkout@v4
+      - name: Extract original project
         shell: bash
-        
         run: |
-        
           set -euo pipefail
-          
-          rm -rf source dist build
-          
-          mkdir -p source dist build
-          
+          rm -rf source build dist
+          mkdir -p source build dist
           tar -xzf 3105-1.1.1-original.tar.gz -C source
-          
-
-
-      - name: Connect client to Railway API
-      
+          PROJECT=source/3105-1.1.1/ThreeOneOSFive.xcodeproj
+          echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
+      - name: Hide legacy URLs from executable
         shell: bash
-        
         run: |
-        
-          set -euo pipefail
-          
           python3 - <<'PY'
-          
           from pathlib import Path
-          
-          import base64
-          
-          root = Path('source')
-          
-          current = 'https://knzgen.up.railway.app'
-          
-          old_domains = ['https://api-production-182c.up.railway.app', 'https://api-key-external.up.railway.app']
-          
-          for path in root.rglob('*.swift'):
-          
+          import re
+          root = Path("source/3105-1.1.1/ThreeOneOSFive")
+          app = root / "App.swift"
+          app_text = app.read_text()
+          helper = """\n\n@inline(never)\nfunc PHDecodeLegacyURL(_ payload: [UInt8]) -> String {\n    let salt = Bundle.main.bundleIdentifier?.utf8.first ?? 0\n    return String(decoding: payload.map { $0 ^ 0x5A ^ salt }, as: UTF8.self)\n}\n"""
+          if "func PHDecodeLegacyURL" not in app_text:
+              app.write_text(app_text + helper)
+          pattern = re.compile(r'"(https?://[^"\\\n]+)"')
+          bundle_salt = ord("c")
+          raw_domain = "raw.githubusercontent.com"
+          raw_encoded = ", ".join(str(b ^ 0x5A ^ bundle_salt) for b in raw_domain.encode("utf-8"))
+          for path in root.rglob("*.swift"):
               text = path.read_text()
-              
-              for old in old_domains:
-              
-                  text = text.replace(old, current)
-                  
-                  for endpoint in ['/api/license/validate', '/api/patches/catalog', '/api/patches/external/catalog', '/api/announcement']:
-                  
-                      old_b64 = base64.b64encode((old + endpoint).encode()).decode()
-                      
-                      new_b64 = base64.b64encode((current + endpoint).encode()).decode()
-                      
-                      text = text.replace(old_b64, new_b64)
-                      
-              path.write_text(text)
-              
+              def encode(match):
+                  value = match.group(1)
+                  values = ", ".join(str(b ^ 0x5A ^ bundle_salt) for b in value.encode("utf-8"))
+                  return f'PHDecodeLegacyURL([{values}])'
+              updated = pattern.sub(encode, text)
+              updated = updated.replace('"raw.githubusercontent.com"', f'PHDecodeLegacyURL([{raw_encoded}])')
+              if updated != text:
+                  path.write_text(updated)
           PY
-          
-          if grep -R -nE 'api-production-182c|api-key-external' source --include='*.swift'; then
-          
-            echo 'Legacy API URL remained in the iOS sources' >&2
-            
-            exit 1
-            
-          fi
-          
-
-
-      - name: Build and package IPA
-      
+      - name: Apply app startup and navigation changes
         shell: bash
-        
         run: |
-        
           set -euo pipefail
+          APP_SWIFT=source/3105-1.1.1/ThreeOneOSFive/App.swift
+          NAV_SWIFT=source/3105-1.1.1/ThreeOneOSFive/helpers/AppTabNavigationState.swift
+          python3 - "$APP_SWIFT" "$NAV_SWIFT" <<'PY'
+          from pathlib import Path
+          import sys
+          app, nav = map(Path, sys.argv[1:])
+          a = app.read_text()
+          old = "@State private var showOnboarding = OnboardingStore.shouldShow()"
+          if old not in a: raise SystemExit("onboarding state declaration not found")
+          app.write_text(a.replace(old, "@State private var showOnboarding = false", 1))
+          n = nav.read_text()
+          old = "AppSection.allCases.filter(isVisible)"
+          if old not in n: raise SystemExit("visibleSections declaration not found")
+          nav.write_text(n.replace(old, "return [.home, .patches, .external].filter(isVisible)", 1))
+          PY
+      - name: Add API login gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_SWIFT=source/3105-1.1.1/ThreeOneOSFive/App.swift
+          python3 - "$APP_SWIFT" "aW1wb3J0IEZvdW5kYXRpb24KaW1wb3J0IFN3aWZ0VUkKaW1wb3J0IFVJS2l0CmltcG9ydCBTZWN1cml0eQoKc3RydWN0IExpY2Vuc2VSZXNwb25zZTogQ29kYWJsZSB7CiAgICBsZXQgdmFsaWQ6IEJvb2wKICAgIGxldCBjb2RlOiBTdHJpbmc/CiAgICBsZXQgbWVzc2FnZTogU3RyaW5nCiAgICBsZXQga2V5OiBTdHJpbmc/CiAgICBsZXQgZXhwaXJlc0F0OiBTdHJpbmc/CiAgICBsZXQgcmVtYWluaW5nVXNlczogSW50PwogICAgbGV0IGRldmljZUlEOiBTdHJpbmc/CiAgICBsZXQgcGFja2FnZTogU3RyaW5nPwogICAgbGV0IGR1cmF0aW9uRGF5czogSW50PwogICAgbGV0IGR1cmF0aW9uTWludXRlczogSW50PwogICAgbGV0IGFjdGl2YXRlZEF0OiBTdHJpbmc/CgogICAgZW51bSBDb2RpbmdLZXlzOiBTdHJpbmcsIENvZGluZ0tleSB7CiAgICAgICAgY2FzZSB2YWxpZCwgY29kZSwgbWVzc2FnZSwga2V5LCBwYWNrYWdlCiAgICAgICAgY2FzZSBleHBpcmVzQXQgPSAiZXhwaXJlc0F0IgogICAgICAgIGNhc2UgcmVtYWluaW5nVXNlcyA9ICJyZW1haW5pbmdVc2VzIgogICAgICAgIGNhc2UgZGV2aWNlSUQgPSAiZGV2aWNlSWQiCiAgICAgICAgY2FzZSBkdXJhdGlvbkRheXMgPSAiZHVyYXRpb25EYXlzIgogICAgICAgIGNhc2UgZHVyYXRpb25NaW51dGVzID0gImR1cmF0aW9uTWludXRlcyIKICAgICAgICBjYXNlIGFjdGl2YXRlZEF0ID0gImFjdGl2YXRlZEF0IgogICAgfQp9CgplbnVtIExpY2Vuc2VBUEkgewogICAgc3RhdGljIGxldCBhcGlVUkwgPSBVUkwoc3RyaW5nOiAiaHR0cHM6Ly9rbnpnZW4udXAucmFpbHdheS5hcHA=L2FwaS9saWNlbnNlL3ZhbGlkYXRlIikhCgogICAgc3RhdGljIGZ1bmMgdmFsaWRhdGUoa2V5OiBTdHJpbmcpIGFzeW5jIHRocm93cyAtPiBMaWNlbnNlUmVzcG9uc2UgewogICAgICAgIHZhciByZXF1ZXN0ID0gVVJMUmVxdWVzdCh1cmw6IGFwaVVSTCkKICAgICAgICByZXF1ZXN0Lmh0dHBNZXRob2QgPSAiUE9TVCIKICAgICAgICByZXF1ZXN0LnRpbWVvdXRJbnRlcnZhbCA9IDIwCiAgICAgICAgcmVxdWVzdC5zZXRWYWx1ZSgiYXBwbGljYXRpb24vanNvbiIsIGZvckhUVFBIZWFkZXJGaWVsZDogIkNvbnRlbnQtVHlwZSIpCiAgICAgICAgcmVxdWVzdC5zZXRWYWx1ZSgiYXBwbGljYXRpb24vanNvbiIsIGZvckhUVFBIZWFkZXJGaWVsZDogIkFjY2VwdCIpCiAgICAgICAgbGV0IGRldmljZUlEID0gVUlEZXZpY2UuY3VycmVudC5pZGVudGlmaWVyRm9yVmVuZG9yPy51dWlkU3RyaW5nID8/ICJ1bmtub3duLWRldmljZSIKICAgICAgICBsZXQgYnVuZGxlSUQgPSBCdW5kbGUubWFpbi5idW5kbGVJZGVudGlmaWVyID8/ICJ1bmtub3duLmJ1bmRsZSIKICAgICAgICBsZXQgdmVyc2lvbiA9IEJ1bmRsZS5tYWluLmluZm9EaWN0aW9uYXJ5P1siQ0ZCdW5kbGVTaG9ydFZlcnNpb25TdHJpbmciXSBhcz8gU3RyaW5nID8/ICIxLjAiCiAgICAgICAgcmVxdWVzdC5odHRwQm9keSA9IHRyeSBKU09OU2VyaWFsaXphdGlvbi5kYXRhKHdpdGhKU09OT2JqZWN0OiBbCiAgICAgICAgICAgICJrZXkiOiBrZXkudHJpbW1pbmdDaGFyYWN0ZXJzKGluOiAud2hpdGVzcGFjZXNBbmROZXdsaW5lcykudXBwZXJjYXNlZCgpLAogICAgICAgICAgICAiZGV2aWNlX2lkIjogZGV2aWNlSUQsCiAgICAgICAgICAgICJwYWNrYWdlIjogYnVuZGxlSUQsCiAgICAgICAgICAgICJhcHBfdmVyc2lvbiI6IHZlcnNpb24KICAgICAgICBdKQogICAgICAgIGxldCAoZGF0YSwgcmVzcG9uc2UpID0gdHJ5IGF3YWl0IFVSTFNlc3Npb24uc2hhcmVkLmRhdGEoZm9yOiByZXF1ZXN0KQogICAgICAgIGd1YXJkIGxldCBodHRwID0gcmVzcG9uc2UgYXM/IEhUVFBVUkxSZXNwb25zZSwgKDIwMC4uPDMwMCkuY29udGFpbnMoaHR0cC5zdGF0dXNDb2RlKSBlbHNlIHsKICAgICAgICAgICAgdGhyb3cgVVJMRXJyb3IoLmJhZFNlcnZlclJlc3BvbnNlKQogICAgICAgIH0KICAgICAgICByZXR1cm4gdHJ5IEpTT05EZWNvZGVyKCkuZGVjb2RlKExpY2Vuc2VSZXNwb25zZS5zZWxmLCBmcm9tOiBkYXRhKQogICAgfQp9CgpmaW5hbCBjbGFzcyBMaWNlbnNlU3RvcmUgewogICAgcHJpdmF0ZSBzdGF0aWMgbGV0IHNlcnZpY2UgPSAiY29tLnRocmVlb25lb3NmaXZlLmxpY2Vuc2UiCiAgICBwcml2YXRlIHN0YXRpYyBsZXQgYWNjb3VudCA9ICJhY3RpdmF0aW9uLWtleSIKCiAgICBzdGF0aWMgdmFyIHN0b3JlZEtleTogU3RyaW5nPyB7CiAgICAgICAgbGV0IHF1ZXJ5OiBbU3RyaW5nOiBBbnldID0gWwogICAgICAgICAgICBrU2VjQ2xhc3MgYXMgU3RyaW5nOiBrU2VjQ2xhc3NHZW5lcmljUGFzc3dvcmQsCiAgICAgICAgICAgIGtTZWNBdHRyU2VydmljZSBhcyBTdHJpbmc6IHNlcnZpY2UsCiAgICAgICAgICAgIGtTZWNBdHRyQWNjb3VudCBhcyBTdHJpbmc6IGFjY291bnQsCiAgICAgICAgICAgIGtTZWNSZXR1cm5EYXRhIGFzIFN0cmluZzogdHJ1ZSwKICAgICAgICAgICAga1NlY01hdGNoTGltaXQgYXMgU3RyaW5nOiBrU2VjTWF0Y2hMaW1pdE9uZQogICAgICAgIF0KICAgICAgICB2YXIgcmVzdWx0OiBBbnlPYmplY3Q/CiAgICAgICAgZ3VhcmQgU2VjSXRlbUNvcHlNYXRjaGluZyhxdWVyeSBhcyBDRkRpY3Rpb25hcnksICZyZXN1bHQpID09IGVyclNlY1N1Y2Nlc3MsCiAgICAgICAgICAgICAgbGV0IGRhdGEgPSByZXN1bHQgYXM/IERhdGEsCiAgICAgICAgICAgICAgbGV0IHZhbHVlID0gU3RyaW5nKGRhdGE6IGRhdGEsIGVuY29kaW5nOiAudXRmOCksCiAgICAgICAgICAgICAgIXZhbHVlLmlzRW1wdHkgZWxzZSB7IHJldHVybiBuaWwgfQogICAgICAgIHJldHVybiB2YWx1ZQogICAgfQoKICAgIHN0YXRpYyBmdW5jIHNhdmUoXyBrZXk6IFN0cmluZykgewogICAgICAgIGxldCBxdWVyeTogW1N0cmluZzogQW55XSA9IFsKICAgICAgICAgICAga1NlY0NsYXNzIGFzIFN0cmluZzoga1NlY0NsYXNzR2VuZXJpY1Bhc3N3b3JkLAogICAgICAgICAgICBrU2VjQXR0clNlcnZpY2UgYXMgU3RyaW5nOiBzZXJ2aWNlLAogICAgICAgICAgICBrU2VjQXR0ckFjY291bnQgYXMgU3RyaW5nOiBhY2NvdW50CiAgICAgICAgXQogICAgICAgIFNlY0l0ZW1EZWxldGUocXVlcnkgYXMgQ0ZEaWN0aW9uYXJ5KQogICAgICAgIHZhciBpdGVtID0gcXVlcnkKICAgICAgICBpdGVtW2tTZWNWYWx1ZURhdGEgYXMgU3RyaW5nXSA9IERhdGEoa2V5LnV0ZjgpCiAgICAgICAgU2VjSXRlbUFkZChpdGVtIGFzIENGRGljdGlvbmFyeSwgbmlsKQogICAgfQp9CgpzdHJ1Y3QgTGljZW5zZVByb2ZpbGVTbmFwc2hvdDogQ29kYWJsZSB7CiAgICBsZXQgcHJvZHVjdDogU3RyaW5nCiAgICBsZXQgc3RhdHVzOiBTdHJpbmcKICAgIGxldCBleHBpcmVzQXQ6IFN0cmluZz8KICAgIGxldCBkZXZpY2VJRDogU3RyaW5nPwogICAgbGV0IHBhY2thZ2U6IFN0cmluZz8KICAgIGxldCBkdXJhdGlvbkRheXM6IEludD8KICAgIGxldCBkdXJhdGlvbk1pbnV0ZXM6IEludD8KICAgIGxldCBhY3RpdmF0ZWRBdDogU3RyaW5nPwp9CgpleHRlbnNpb24gTGljZW5zZVN0b3JlIHsKICAgIHByaXZhdGUgc3RhdGljIGxldCBwcm9maWxlS2V5ID0gImxpY2Vuc2UtcHJvZmlsZS1zbmFwc2hvdCIKCiAgICBzdGF0aWMgdmFyIHByb2ZpbGVTbmFwc2hvdDogTGljZW5zZVByb2ZpbGVTbmFwc2hvdD8gewogICAgICAgIGd1YXJkIGxldCBkYXRhID0gVXNlckRlZmF1bHRzLnN0YW5kYXJkLmRhdGEoZm9yS2V5OiBwcm9maWxlS2V5KSBlbHNlIHsgcmV0dXJuIG5pbCB9CiAgICAgICAgcmV0dXJuIHRyeT8gSlNPTkRlY29kZXIoKS5kZWNvZGUoTGljZW5zZVByb2ZpbGVTbmFwc2hvdC5zZWxmLCBmcm9tOiBkYXRhKQogICAgfQoKICAgIHN0YXRpYyBmdW5jIHNhdmUoXyBrZXk6IFN0cmluZywgcmVzcG9uc2U6IExpY2Vuc2VSZXNwb25zZSkgewogICAgICAgIHNhdmUoa2V5KQogICAgICAgIGxldCBzbmFwc2hvdCA9IExpY2Vuc2VQcm9maWxlU25hcHNob3QoCiAgICAgICAgICAgIHByb2R1Y3Q6ICJFWFRFUk5BTCIsCiAgICAgICAgICAgIHN0YXR1czogcmVzcG9uc2UudmFsaWQgPyAiVklQIEFUSVZPIiA6ICJJTkFUSVZBIiwKICAgICAgICAgICAgZXhwaXJlc0F0OiByZXNwb25zZS5leHBpcmVzQXQsCiAgICAgICAgICAgIGRldmljZUlEOiByZXNwb25zZS5kZXZpY2VJRCwKICAgICAgICAgICAgcGFja2FnZTogcmVzcG9uc2UucGFja2FnZSwKICAgICAgICAgICAgZHVyYXRpb25EYXlzOiByZXNwb25zZS5kdXJhdGlvbkRheXMsCiAgICAgICAgICAgIGR1cmF0aW9uTWludXRlczogcmVzcG9uc2UuZHVyYXRpb25NaW51dGVzLAogICAgICAgICAgICBhY3RpdmF0ZWRBdDogcmVzcG9uc2UuYWN0aXZhdGVkQXQKICAgICAgICApCiAgICAgICAgaWYgbGV0IGRhdGEgPSB0cnk/IEpTT05FbmNvZGVyKCkuZW5jb2RlKHNuYXBzaG90KSB7CiAgICAgICAgICAgIFVzZXJEZWZhdWx0cy5zdGFuZGFyZC5zZXQoZGF0YSwgZm9yS2V5OiBwcm9maWxlS2V5KQogICAgICAgIH0KICAgIH0KfQoKc3RydWN0IExpY2Vuc2VQcm9maWxlVmlldzogVmlldyB7CiAgICBARW52aXJvbm1lbnRPYmplY3QgcHJpdmF0ZSB2YXIgYXBwU3RhdGU6IEFwcFN0YXRlCgogICAgQFN0YXRlIHByaXZhdGUgdmFyIHNuYXBzaG90OiBMaWNlbnNlUHJvZmlsZVNuYXBzaG90PwoKICAgIHByaXZhdGUgZnVuYyByZWZyZXNoU25hcHNob3QoKSBhc3luYyB7CiAgICAgICAgZ3VhcmQgbGV0IGtleSA9IExpY2Vuc2VTdG9yZS5zdG9yZWRLZXkgZWxzZSB7IHJldHVybiB9CiAgICAgICAgZG8gewogICAgICAgICAgICBsZXQgcmVzcG9uc2UgPSB0cnkgYXdhaXQgTGljZW5zZUFQSS52YWxpZGF0ZShrZXk6IGtleSkKICAgICAgICAgICAgZ3VhcmQgcmVzcG9uc2UudmFsaWQgZWxzZSB7IHJldHVybiB9CiAgICAgICAgICAgIExpY2Vuc2VTdG9yZS5zYXZlKGtleSwgcmVzcG9uc2U6IHJlc3BvbnNlKQogICAgICAgICAgICBzbmFwc2hvdCA9IExpY2Vuc2VTdG9yZS5wcm9maWxlU25hcHNob3QKICAgICAgICB9IGNhdGNoIHsKICAgICAgICAgICAgLy8gS2VlcCB0aGUgbGFzdCBsb2NhbGx5IGNhY2hlZCBzbmFwc2hvdCB3aGVuIHRoZSBuZXR3b3JrIGlzIHVuYXZhaWxhYmxlLgogICAgICAgIH0KICAgIH0KCiAgICBwcml2YXRlIHZhciBkZXZpY2VJRDogU3RyaW5nIHsKICAgICAgICBsZXQgdmFsdWUgPSBzbmFwc2hvdD8uZGV2aWNlSUQgPz8gVUlEZXZpY2UuY3VycmVudC5pZGVudGlmaWVyRm9yVmVuZG9yPy51dWlkU3RyaW5nID8/ICJJbmRpc3BvbsOtdmVsIgogICAgICAgIHJldHVybiB2YWx1ZS5jb3VudCA+IDE4ID8gU3RyaW5nKHZhbHVlLnByZWZpeCgxOCkpICsgIuKApiIgOiB2YWx1ZQogICAgfQoKICAgIHByaXZhdGUgdmFyIGV4cGlyYXRpb246IFN0cmluZyB7CiAgICAgICAgZ3VhcmQgbGV0IHJhdyA9IHNuYXBzaG90Py5leHBpcmVzQXQsIGxldCBkYXRlID0gTGljZW5zZVByb2ZpbGVWaWV3LnBhcnNlRGF0ZShyYXcpIGVsc2UgewogICAgICAgICAgICByZXR1cm4gIkFndWFyZGFuZG8gYXRpdmHDp8OjbyIKICAgICAgICB9CiAgICAgICAgcmV0dXJuIGRhdGUuZm9ybWF0dGVkKGRhdGU6IC5udW1lcmljLCB0aW1lOiAuc2hvcnRlbmVkKQogICAgfQoKICAgIHByaXZhdGUgdmFyIGtleUR1cmF0aW9uOiBTdHJpbmcgewogICAgICAgIGlmIGxldCBtaW51dGVzID0gc25hcHNob3Q/LmR1cmF0aW9uTWludXRlcywgbWludXRlcyA+IDAgewogICAgICAgICAgICBpZiBtaW51dGVzICUgMV80NDAgPT0gMCB7CiAgICAgICAgICAgICAgICBsZXQgZGF5cyA9IG1pbnV0ZXMgLyAxXzQ0MAogICAgICAgICAgICAgICAgcmV0dXJuIGRheXMgPT0gMSA/ICIxIGRpYSIgOiAiXChkYXlzKSBkaWFzIgogICAgICAgICAgICB9CiAgICAgICAgICAgIGlmIG1pbnV0ZXMgJSA2MCA9PSAwIHsKICAgICAgICAgICAgICAgIGxldCBob3VycyA9IG1pbnV0ZXMgLyA2MAogICAgICAgICAgICAgICAgcmV0dXJuIGhvdXJzID09IDEgPyAiMSBob3JhIiA6ICJcKGhvdXJzKSBob3JhcyIKICAgICAgICAgICAgfQogICAgICAgICAgICByZXR1cm4gIlwobWludXRlcykgbWluIgogICAgICAgIH0KICAgICAgICBndWFyZCBsZXQgZGF5cyA9IHNuYXBzaG90Py5kdXJhdGlvbkRheXMsIGRheXMgPiAwIGVsc2UgeyByZXR1cm4gIkluZGlzcG9uw612ZWwiIH0KICAgICAgICByZXR1cm4gZGF5cyA9PSAxID8gIjEgZGlhIiA6ICJcKGRheXMpIGRpYXMiCiAgICB9CgogICAgcHJpdmF0ZSBmdW5jIHJlbWFpbmluZyhhdCBub3c6IERhdGUpIC0+IFN0cmluZyB7CiAgICAgICAgZ3VhcmQgbGV0IHJhdyA9IHNuYXBzaG90Py5leHBpcmVzQXQsIGxldCBkYXRlID0gTGljZW5zZVByb2ZpbGVWaWV3LnBhcnNlRGF0ZShyYXcpIGVsc2UgewogICAgICAgICAgICByZXR1cm4ga2V5RHVyYXRpb24KICAgICAgICB9CiAgICAgICAgbGV0IHNlY29uZHMgPSBtYXgoMCwgZGF0ZS50aW1lSW50ZXJ2YWxTaW5jZShub3cpKQogICAgICAgIGxldCBkYXlzID0gSW50KHNlY29uZHMgLyA4Nl80MDApCiAgICAgICAgbGV0IGhvdXJzID0gSW50KHNlY29uZHMgLyAzXzYwMCkgJSAyNAogICAgICAgIGxldCBtaW51dGVzID0gSW50KHNlY29uZHMgLyA2MCkgJSA2MAogICAgICAgIGlmIGRheXMgPiAwIHsgcmV0dXJuICJcKGtleUR1cmF0aW9uKSDigKIgXChkYXlzKWQgXChob3VycyloIHJlc3RhbnRlcyIgfQogICAgICAgIGlmIGhvdXJzID4gMCB7IHJldHVybiAiXChrZXlEdXJhdGlvbikg4oCiIFwoaG91cnMpaCBcKG1pbnV0ZXMpbSByZXN0YW50ZXMiIH0KICAgICAgICByZXR1cm4gIlwoa2V5RHVyYXRpb24pIOKAoiBcKG1pbnV0ZXMpbSByZXN0YW50ZXMiCiAgICB9CgogICAgcHJpdmF0ZSBzdGF0aWMgZnVuYyBwYXJzZURhdGUoXyByYXc6IFN0cmluZykgLT4gRGF0ZT8gewogICAgICAgIGxldCBmcmFjdGlvbmFsID0gSVNPODYwMURhdGVGb3JtYXR0ZXIoKQogICAgICAgIGZyYWN0aW9uYWwuZm9ybWF0T3B0aW9ucyA9IFsud2l0aEludGVybmV0RGF0ZVRpbWUsIC53aXRoRnJhY3Rpb25hbFNlY29uZHNdCiAgICAgICAgaWYgbGV0IGRhdGUgPSBmcmFjdGlvbmFsLmRhdGUoZnJvbTogcmF3KSB7IHJldHVybiBkYXRlIH0KICAgICAgICBsZXQgZmFsbGJhY2sgPSBJU084NjAxRGF0ZUZvcm1hdHRlcigpCiAgICAgICAgZmFsbGJhY2suZm9ybWF0T3B0aW9ucyA9IFsud2l0aEludGVybmV0RGF0ZVRpbWVdCiAgICAgICAgcmV0dXJuIGZhbGxiYWNrLmRhdGUoZnJvbTogcmF3KQogICAgfQoKICAgIHZhciBib2R5OiBzb21lIFZpZXcgewogICAgICAgIFNlY3Rpb24gewogICAgICAgICAgICBMYWJlbGVkQ29udGVudCgiUHJvZHV0byIpIHsKICAgICAgICAgICAgICAgIFRleHQoc25hcHNob3Q/LnByb2R1Y3QgPz8gIkVYVEVSTkFMIikKICAgICAgICAgICAgICAgICAgICAuZm9udCguYm9keS5tb25vc3BhY2VkKCkpCiAgICAgICAgICAgIH0KICAgICAgICAgICAgTGFiZWxlZENvbnRlbnQoIlN0YXR1cyBkYSBLZXkiKSB7CiAgICAgICAgICAgICAgICBUZXh0KHNuYXBzaG90Py5zdGF0dXMgPz8gIlZJUCBBVElWTyIpCiAgICAgICAgICAgICAgICAgICAgLmZvbnRXZWlnaHQoLnNlbWlib2xkKQogICAgICAgICAgICAgICAgICAgIC5mb3JlZ3JvdW5kU3R5bGUoLmdyZWVuKQogICAgICAgICAgICB9CiAgICAgICAgICAgIExhYmVsZWRDb250ZW50KCJUZW1wbyBkYSBLZXkiKSB7CiAgICAgICAgICAgICAgICBUaW1lbGluZVZpZXcoLnBlcmlvZGljKGZyb206IC5ub3csIGJ5OiA2MCkpIHsgY29udGV4dCBpbgogICAgICAgICAgICAgICAgICAgIFRleHQocmVtYWluaW5nKGF0OiBjb250ZXh0LmRhdGUpKQogICAgICAgICAgICAgICAgICAgICAgICAuZm9udCguZm9vdG5vdGUubW9ub3NwYWNlZCgpKQogICAgICAgICAgICAgICAgICAgICAgICAubXVsdGlsaW5lVGV4dEFsaWdubWVudCgudHJhaWxpbmcpCiAgICAgICAgICAgICAgICB9CiAgICAgICAgICAgIH0KICAgICAgICAgICAgTGFiZWxlZENvbnRlbnQoIkV4cGlyYcOnw6NvIikgewogICAgICAgICAgICAgICAgVGV4dChleHBpcmF0aW9uKQogICAgICAgICAgICAgICAgICAgIC5mb250KC5mb290bm90ZS5tb25vc3BhY2VkKCkpCiAgICAgICAgICAgICAgICAgICAgLm11bHRpbGluZVRleHRBbGlnbm1lbnQoLnRyYWlsaW5nKQogICAgICAgICAgICB9CiAgICAgICAgICAgIExhYmVsZWRDb250ZW50KCJJRCBkbyBEaXNwb3NpdGl2byIpIHsKICAgICAgICAgICAgICAgIFRleHQoZGV2aWNlSUQpCiAgICAgICAgICAgICAgICAgICAgLmZvbnQoLmZvb3Rub3RlLm1vbm9zcGFjZWQoKSkKICAgICAgICAgICAgICAgICAgICAudGV4dFNlbGVjdGlvbiguZW5hYmxlZCkKICAgICAgICAgICAgfQogICAgICAgIH0gaGVhZGVyOiB7CiAgICAgICAgICAgIFRleHQoIklORk9STUHDh8OVRVMgREEgTElDRU7Dh0EiKQogICAgICAgIH0KCiAgICAgICAgU2VjdGlvbiB7CiAgICAgICAgICAgIExhYmVsZWRDb250ZW50KCJNb2RlbG8iKSB7CiAgICAgICAgICAgICAgICBUZXh0KEFwcEluZm8uZGlzcGxheU1hY2hpbmVOYW1lKQogICAgICAgICAgICAgICAgICAgIC5mb250KC5ib2R5Lm1vbm9zcGFjZWQoKSkKICAgICAgICAgICAgfQogICAgICAgICAgICBMYWJlbGVkQ29udGVudCgiVmVyc8OjbyBpT1MiKSB7CiAgICAgICAgICAgICAgICBUZXh0KCJcKEFwcEluZm8ub3NWZXJzaW9uKSAoXChBcHBJbmZvLm9zQnVpbGQpKSIpCiAgICAgICAgICAgICAgICAgICAgLmZvbnQoLmZvb3Rub3RlLm1vbm9zcGFjZWQoKSkKICAgICAgICAgICAgfQogICAgICAgICAgICBMYWJlbGVkQ29udGVudCgiQ29tcGF0aWJpbGlkYWRlIFJvb3QvUE1BUCIpIHsKICAgICAgICAgICAgICAgIFRleHQoYXBwU3RhdGUuaXNTdXBwb3J0ZWQgPyAiQ09NUEFUw41WRUwgKFNJTSkiIDogIklOQ09NUEFUw41WRUwiKQogICAgICAgICAgICAgICAgICAgIC5mb250V2VpZ2h0KC5zZW1pYm9sZCkKICAgICAgICAgICAgICAgICAgICAuZm9yZWdyb3VuZFN0eWxlKGFwcFN0YXRlLmlzU3VwcG9ydGVkID8gLmdyZWVuIDogLnJlZCkKICAgICAgICAgICAgfQogICAgICAgIH0gaGVhZGVyOiB7CiAgICAgICAgICAgIFRleHQoIkRJU1BPU0lUSVZPICYgQ09NUEFUSUJJTElEQURFIikKICAgICAgICB9CgogICAgICAgIFNlY3Rpb24gewogICAgICAgICAgICBMYWJlbGVkQ29udGVudCgiUHJvdGXDp8OjbyBBbnRpLURlYnVnZ2luZyIpIHsKICAgICAgICAgICAgICAgIFRleHQoIk7Dg08gVkVSSUZJQ0FEQSIpCiAgICAgICAgICAgICAgICAgICAgLmZvbnRXZWlnaHQoLnNlbWlib2xkKQogICAgICAgICAgICAgICAgICAgIC5mb3JlZ3JvdW5kU3R5bGUoLnNlY29uZGFyeSkKICAgICAgICAgICAgfQogICAgICAgICAgICBMYWJlbGVkQ29udGVudCgiQ3JpcHRvZ3JhZmlhIEtleWNoYWluIikgewogICAgICAgICAgICAgICAgVGV4dCgiQVRJVkEiKQogICAgICAgICAgICAgICAgICAgIC5mb250V2VpZ2h0KC5zZW1pYm9sZCkKICAgICAgICAgICAgICAgICAgICAuZm9yZWdyb3VuZFN0eWxlKC5ncmVlbikKICAgICAgICAgICAgfQogICAgICAgIH0gaGVhZGVyOiB7CiAgICAgICAgICAgIFRleHQoIlNFR1VSQU7Dh0EgJiBBTlRJQ1JBQ0siKQogICAgICAgIH0gZm9vdGVyOiB7CiAgICAgICAgICAgIFRleHQoIkEga2V5IMOpIGFybWF6ZW5hZGEgbm8gS2V5Y2hhaW47IGEgcHJvdGXDp8OjbyBhbnRpLWRlYnVnZ2luZyBuw6NvIMOpIGRlY2xhcmFkYSBjb21vIGF0aXZhIHNlbSB1bWEgdmVyaWZpY2HDp8OjbyBuYXRpdmEgY29ycmVzcG9uZGVudGUuIikKICAgICAgICB9CiAgICAgICAgLnRhc2sgewogICAgICAgICAgICBzbmFwc2hvdCA9IExpY2Vuc2VTdG9yZS5wcm9maWxlU25hcHNob3QKICAgICAgICAgICAgYXdhaXQgcmVmcmVzaFNuYXBzaG90KCkKICAgICAgICB9CiAgICB9Cn0KCnN0cnVjdCBMaWNlbnNlTG9naW5WaWV3OiBWaWV3IHsKICAgIGxldCBvblN1Y2Nlc3M6ICgpIC0+IFZvaWQKICAgIEBTdGF0ZSBwcml2YXRlIHZhciBrZXkgPSAiIgogICAgQFN0YXRlIHByaXZhdGUgdmFyIGlzTG9hZGluZyA9IGZhbHNlCiAgICBAU3RhdGUgcHJpdmF0ZSB2YXIgZXJyb3JNZXNzYWdlOiBTdHJpbmc/CgogICAgdmFyIGJvZHk6IHNvbWUgVmlldyB7CiAgICAgICAgWlN0YWNrIHsKICAgICAgICAgICAgQ29sb3Iud2hpdGUuaWdub3Jlc1NhZmVBcmVhKCkKICAgICAgICAgICAgVlN0YWNrKHNwYWNpbmc6IDIyKSB7CiAgICAgICAgICAgICAgICBTcGFjZXIoKQogICAgICAgICAgICAgICAgSW1hZ2Uoc3lzdGVtTmFtZTogImxvY2suc2hpZWxkLmZpbGwiKQogICAgICAgICAgICAgICAgICAgIC5mb250KC5zeXN0ZW0oc2l6ZTogNTQsIHdlaWdodDogLnNlbWlib2xkKSkKICAgICAgICAgICAgICAgICAgICAuZm9yZWdyb3VuZFN0eWxlKENvbG9yLmdyZWVuKQogICAgICAgICAgICAgICAgVGV4dCgiQWNlc3NvIGFvIGFwbGljYXRpdm8iKQogICAgICAgICAgICAgICAgICAgIC5mb250KC5zeXN0ZW0oc2l6ZTogMjcsIHdlaWdodDogLmJvbGQpKQogICAgICAgICAgICAgICAgICAgIC5mb3JlZ3JvdW5kU3R5bGUoQ29sb3IuYmxhY2spCiAgICAgICAgICAgICAgICBUZXh0KCJEaWdpdGUgc3VhIGNoYXZlIHBhcmEgY29udGludWFyIikKICAgICAgICAgICAgICAgICAgICAuZm9udCguc3lzdGVtKHNpemU6IDE2KSkKICAgICAgICAgICAgICAgICAgICAuZm9yZWdyb3VuZFN0eWxlKENvbG9yLmdyYXkpCiAgICAgICAgICAgICAgICBWU3RhY2soYWxpZ25tZW50OiAubGVhZGluZywgc3BhY2luZzogOCkgewogICAgICAgICAgICAgICAgICAgIFRleHQoIkNIQVZFIERFIEFDRVNTTyIpCiAgICAgICAgICAgICAgICAgICAgICAgIC5mb250KC5zeXN0ZW0oc2l6ZTogMTIsIHdlaWdodDogLmJvbGQpKQogICAgICAgICAgICAgICAgICAgICAgICAuZm9yZWdyb3VuZFN0eWxlKENvbG9yLmdyYXkpCiAgICAgICAgICAgICAgICAgICAgU2VjdXJlRmllbGQoIkNvbGUgc3VhIGNoYXZlIiwgdGV4dDogJGtleSkKICAgICAgICAgICAgICAgICAgICAgICAgLnRleHRJbnB1dEF1dG9jYXBpdGFsaXphdGlvbiguY2hhcmFjdGVycykKICAgICAgICAgICAgICAgICAgICAgICAgLmF1dG9jb3JyZWN0aW9uRGlzYWJsZWQoKQogICAgICAgICAgICAgICAgICAgICAgICAucGFkZGluZyguaG9yaXpvbnRhbCwgMTYpCiAgICAgICAgICAgICAgICAgICAgICAgIC5mcmFtZShoZWlnaHQ6IDUyKQogICAgICAgICAgICAgICAgICAgICAgICAuYmFja2dyb3VuZChDb2xvciguc3lzdGVtR3JheTYpKQogICAgICAgICAgICAgICAgICAgICAgICAuY2xpcFNoYXBlKFJvdW5kZWRSZWN0YW5nbGUoY29ybmVyUmFkaXVzOiAxNCwgc3R5bGU6IC5jb250aW51b3VzKSkKICAgICAgICAgICAgICAgICAgICAgICAgLmZvcmVncm91bmRTdHlsZShDb2xvci5ibGFjaykKICAgICAgICAgICAgICAgIH0KICAgICAgICAgICAgICAgIGlmIGxldCBlcnJvck1lc3NhZ2UgewogICAgICAgICAgICAgICAgICAgIFRleHQoZXJyb3JNZXNzYWdlKQogICAgICAgICAgICAgICAgICAgICAgICAuZm9udCguc3lzdGVtKHNpemU6IDE0LCB3ZWlnaHQ6IC5tZWRpdW0pKQogICAgICAgICAgICAgICAgICAgICAgICAuZm9yZWdyb3VuZFN0eWxlKENvbG9yLnJlZCkKICAgICAgICAgICAgICAgICAgICAgICAgLm11bHRpbGluZVRleHRBbGlnbm1lbnQoLmNlbnRlcikKICAgICAgICAgICAgICAgIH0KICAgICAgICAgICAgICAgIEJ1dHRvbihhY3Rpb246IHZhbGlkYXRlKSB7CiAgICAgICAgICAgICAgICAgICAgR3JvdXAgewogICAgICAgICAgICAgICAgICAgICAgICBpZiBpc0xvYWRpbmcgeyBQcm9ncmVzc1ZpZXcoKS50aW50KC53aGl0ZSkgfQogICAgICAgICAgICAgICAgICAgICAgICBlbHNlIHsgVGV4dCgiRU5UUkFSIikuZm9udCguc3lzdGVtKHNpemU6IDE3LCB3ZWlnaHQ6IC5ib2xkKSkgfQogICAgICAgICAgICAgICAgICAgIH0KICAgICAgICAgICAgICAgICAgICAuZnJhbWUobWF4V2lkdGg6IC5pbmZpbml0eSkKICAgICAgICAgICAgICAgICAgICAuZnJhbWUoaGVpZ2h0OiA1MikKICAgICAgICAgICAgICAgICAgICAuZm9yZWdyb3VuZFN0eWxlKENvbG9yLndoaXRlKQogICAgICAgICAgICAgICAgICAgIC5iYWNrZ3JvdW5kKENvbG9yLmdyZWVuKQogICAgICAgICAgICAgICAgICAgIC5jbGlwU2hhcGUoUm91bmRlZFJlY3RhbmdsZShjb3JuZXJSYWRpdXM6IDE0LCBzdHlsZTogLmNvbnRpbnVvdXMpKQogICAgICAgICAgICAgICAgfQogICAgICAgICAgICAgICAgLmRpc2FibGVkKGlzTG9hZGluZyB8fCBrZXkudHJpbW1pbmdDaGFyYWN0ZXJzKGluOiAud2hpdGVzcGFjZXNBbmROZXdsaW5lcykuaXNFbXB0eSkKICAgICAgICAgICAgICAgIFNwYWNlcigpCiAgICAgICAgICAgICAgICBUZXh0KCJTdWEgY2hhdmUgw6kgcHJvdGVnaWRhIG5vIGRpc3Bvc2l0aXZvLiIpCiAgICAgICAgICAgICAgICAgICAgLmZvbnQoLnN5c3RlbShzaXplOiAxMikpCiAgICAgICAgICAgICAgICAgICAgLmZvcmVncm91bmRTdHlsZShDb2xvci5ncmF5KQogICAgICAgICAgICAgICAgICAgIC5wYWRkaW5nKC5ib3R0b20sIDEyKQogICAgICAgICAgICB9CiAgICAgICAgICAgIC5wYWRkaW5nKC5ob3Jpem9udGFsLCAyOCkKICAgICAgICAgICAgLmZyYW1lKG1heFdpZHRoOiA1MjApCiAgICAgICAgfQogICAgICAgIC5wcmVmZXJyZWRDb2xvclNjaGVtZSgubGlnaHQpCiAgICAgICAgLnRhc2sgeyBhd2FpdCB2YWxpZGF0ZVN0b3JlZEtleSgpIH0KICAgIH0KCiAgICBwcml2YXRlIGZ1bmMgdmFsaWRhdGVTdG9yZWRLZXkoKSBhc3luYyB7CiAgICAgICAgZ3VhcmQgbGV0IHN0b3JlZCA9IExpY2Vuc2VTdG9yZS5zdG9yZWRLZXkgZWxzZSB7IHJldHVybiB9CiAgICAgICAga2V5ID0gc3RvcmVkCiAgICAgICAgYXdhaXQgdmFsaWRhdGVDdXJyZW50S2V5KCkKICAgIH0KCiAgICBwcml2YXRlIGZ1bmMgdmFsaWRhdGUoKSB7IFRhc2sgeyBhd2FpdCB2YWxpZGF0ZUN1cnJlbnRLZXkoKSB9IH0KCiAgICBwcml2YXRlIGZ1bmMgdmFsaWRhdGVDdXJyZW50S2V5KCkgYXN5bmMgewogICAgICAgIGxldCBjYW5kaWRhdGUgPSBrZXkudHJpbW1pbmdDaGFyYWN0ZXJzKGluOiAud2hpdGVzcGFjZXNBbmROZXdsaW5lcykudXBwZXJjYXNlZCgpCiAgICAgICAgZ3VhcmQgIWNhbmRpZGF0ZS5pc0VtcHR5IGVsc2UgeyByZXR1cm4gfQogICAgICAgIGF3YWl0IE1haW5BY3Rvci5ydW4geyBpc0xvYWRpbmcgPSB0cnVlOyBlcnJvck1lc3NhZ2UgPSBuaWwgfQogICAgICAgIGRvIHsKICAgICAgICAgICAgbGV0IHJlc3VsdCA9IHRyeSBhd2FpdCBMaWNlbnNlQVBJLnZhbGlkYXRlKGtleTogY2FuZGlkYXRlKQogICAgICAgICAgICBhd2FpdCBNYWluQWN0b3IucnVuIHsKICAgICAgICAgICAgICAgIGlzTG9hZGluZyA9IGZhbHNlCiAgICAgICAgICAgICAgICBndWFyZCByZXN1bHQudmFsaWQgZWxzZSB7IGVycm9yTWVzc2FnZSA9IHJlc3VsdC5tZXNzYWdlOyByZXR1cm4gfQogICAgICAgICAgICAgICAgTGljZW5zZVN0b3JlLnNhdmUoY2FuZGlkYXRlLCByZXNwb25zZTogcmVzdWx0KQogICAgICAgICAgICAgICAgb25TdWNjZXNzKCkKICAgICAgICAgICAgfQogICAgICAgIH0gY2F0Y2ggewogICAgICAgICAgICBhd2FpdCBNYWluQWN0b3IucnVuIHsKICAgICAgICAgICAgICAgIGlzTG9hZGluZyA9IGZhbHNlCiAgICAgICAgICAgICAgICBlcnJvck1lc3NhZ2UgPSAiTsOjbyBmb2kgcG9zc8OtdmVsIHZhbGlkYXIgYSBjaGF2ZS4gVmVyaWZpcXVlIHN1YSBjb25leMOjbyBlIHRlbnRlIG5vdmFtZW50ZS4iCiAgICAgICAgICAgIH0KICAgICAgICB9CiAgICB9Cn0K" <<'PY'
+          import base64, sys
+          from pathlib import Path
+          p = Path(sys.argv[1])
+          t = p.read_text()
+          addition = base64.b64decode(sys.argv[2]).decode()
+          addition = addition.replace("private static var storedKey", "static var storedKey", 1)
+          t = t.replace('import UIKit\n', 'import UIKit\nimport Security\n', 1)
+          t = t.replace('    @State private var showOnboarding = false\n', '    @State private var showOnboarding = false\n    @State private var isLicensed = false\n', 1)
+          t = t.replace('                    .opacity(showOnboarding ? 0 : 1)\n                    .allowsHitTesting(!showOnboarding)', '                    .opacity(showOnboarding || !isLicensed ? 0 : 1)\n                    .allowsHitTesting(!showOnboarding && isLicensed)', 1)
+          anchor = '                    .zIndex(1)\n                }\n'
+          replacement = anchor + '\n                if !showOnboarding && !isLicensed {\n                    LicenseLoginView {\n                        withAnimation(.easeInOut(duration: 0.25)) { isLicensed = true }\n                        appState.detectSupport()\n                        checkForUpdate()\n                    }\n                    .environment(\\.appLanguage, language)\n                    .environment(\\.locale, language.locale)\n                    .zIndex(2)\n                }\n'
+          if anchor not in t:
+              raise SystemExit('overlay anchor not found')
+          t = t.replace(anchor, replacement, 1)
+          t = t.replace('            .onAppear {\n                if !showOnboarding {', '            .onAppear {\n                if !showOnboarding && isLicensed {', 1)
+          t = t.replace('                guard phase == .active, !showOnboarding else { return }', '                guard phase == .active, !showOnboarding, isLicensed else { return }', 1)
+          t += addition
+          p.write_text(t)
+          PY
+
+      - name: Add calculator unlock screen before API
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_SWIFT=source/3105-1.1.1/ThreeOneOSFive/App.swift
+          curl -fsSL https://files.manuscdn.com/user_upload_by_module/session_file/310519663912938762/PqdDhCNKFTkScSzG.swift -o /tmp/CalculatorGateView.swift
+          python3 - "$APP_SWIFT" /tmp/CalculatorGateView.swift <<'PY'
+          from pathlib import Path
+          import sys
+          app = Path(sys.argv[1])
+          component = Path(sys.argv[2]).read_text()
+          t = app.read_text()
+          if 'private var calculatorUnlocked = false' not in t:
+              t = t.replace('    @State private var isLicensed = false\n', '    @State private var isLicensed = false\n    @State private var calculatorUnlocked = false\n', 1)
+          t = t.replace('.opacity(showOnboarding || !isLicensed ? 0 : 1)\n                    .allowsHitTesting(!showOnboarding && isLicensed)', '.opacity(showOnboarding || !calculatorUnlocked || !isLicensed ? 0 : 1)\n                    .allowsHitTesting(!showOnboarding && calculatorUnlocked && isLicensed)', 1)
+          gate = '''                if !showOnboarding && !calculatorUnlocked {
+                    CalculatorGateView {
+                        withAnimation(.easeInOut(duration: 0.25)) { calculatorUnlocked = true }
+                    }
+                    .ignoresSafeArea()
+                    .zIndex(3)
+                }
+
+          '''
+          marker = '                if !showOnboarding && !isLicensed {'
+          if 'CalculatorGateView {' not in t and marker in t:
+              t = t.replace(marker, gate + marker, 1)
+          if 'private struct CalculatorGateView' not in t:
+              t += '\n' + component
+          app.write_text(t)
+          PY
+
+      - name: Remove terminal and settings toolbar buttons
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONTENT_SWIFT=source/3105-1.1.1/ThreeOneOSFive/ContentView.swift
+          python3 - "$CONTENT_SWIFT" <<'PY'
+          from pathlib import Path
+          import re, sys
+          p = Path(sys.argv[1])
+          text = p.read_text()
+          pattern = r"\n\s*ToolbarItem\(placement: \.navigationBarTrailing\) \{\n\s*Button \{ showLogs = true \} label: \{\n\s*Image\(systemName: \"apple\.terminal\"\)\n\s*\}\n\s*\.accessibilityLabel\(language\.text\(\"accessibility\.open_logs\"\)\)\n\s*\}\n\s*ToolbarItem\(placement: \.navigationBarTrailing\) \{\n\s*Button \{ showSettings = true \} label: \{\n\s*Image\(systemName: \"gearshape\"\)\n\s*\}\n\s*\.accessibilityLabel\(language\.text\(\"accessibility\.open_settings\"\)\)\n\s*\}"
+          updated, count = re.subn(pattern, "", text, count=1)
+          p.write_text(updated if count == 1 else text)
+          print(f"removed legacy toolbar block: {count}")
+          PY
+
+      - name: Replace GitHub update checker with Railway announcement
+        shell: bash
+        run: |
+          set -euo pipefail
+          UTILS_SWIFT=source/3105-1.1.1/ThreeOneOSFive/helpers/Utils.swift
+          python3 - <<"PY" "$UTILS_SWIFT"
+          from pathlib import Path
+          import re, sys
+          p = Path(sys.argv[1])
+          t = p.read_text()
+          replacement = r"""enum AppUpdateChecker {
+              static let dismissedVersionKey = "update.dismissedVersion"
+              struct Offer: Identifiable { let id = UUID(); let version: String; let url: URL }
+              static let apiURL = URL(string: String(data: Data(base64Encoded: "aHR0cHM6Ly9rbnpnZW4udXAucmFpbHdheS5hcHA=L2FwaS9hbm5vdW5jZW1lbnQ=")!, encoding: .utf8)!)!
+              static func dismiss(version: String) { UserDefaults.standard.set(version, forKey: dismissedVersionKey) }
+              static func check() async -> Offer? {
+                  do {
+                      let (data, response) = try await URLSession.shared.data(from: apiURL)
+                      guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
+                      let a = try JSONDecoder().decode(Announcement.self, from: data)
+                      guard a.enabled, let url = URL(string: a.url), UserDefaults.standard.string(forKey: dismissedVersionKey) != a.version else { return nil }
+                      return Offer(version: a.version, url: url)
+                  } catch { return nil }
+              }
+              private struct Announcement: Decodable { let enabled: Bool; let version: String; let url: String }
+          }"""
+          updated, count = re.subn(r"enum AppUpdateChecker \{.*\Z", replacement, t, count=1, flags=re.S)
+          if count != 1: raise SystemExit("AppUpdateChecker enum not found")
+          p.write_text(updated)
+          PY
+      - name: Set Início and Injector navigation labels
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONTENT_SWIFT=source/3105-1.1.1/ThreeOneOSFive/ContentView.swift
+          python3 - "$CONTENT_SWIFT" <<'PY'
+          from pathlib import Path
+          import sys
+          p=Path(sys.argv[1])
+          t=p.read_text()
+          t=t.replace('title: language.text(section.titleKey)', 'title: section == .home ? "Início" : (section == .external ? "External" : "PROXY")', 1)
+          t=t.replace('systemImage: section.systemImage', 'systemImage: section == .home ? "house.fill" : (section == .patches ? "scope" : "gamecontroller.fill")', 1)
+          p.write_text(t)
+          PY
+
+      - name: Remove Cleaner and Wallpapers feature section
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONTENT_SWIFT=source/3105-1.1.1/ThreeOneOSFive/ContentView.swift
+          python3 - "$CONTENT_SWIFT" <<'PY'
+          from pathlib import Path
+          import re, sys
+          p=Path(sys.argv[1]); text=p.read_text()
+          text2=re.sub(r'^\s*featuresSection\s*$\n?', '', text, count=1, flags=re.MULTILINE)
+          p.write_text(text2)
+          print(f'removed legacy features section call: {text2 != text}')
+          PY
+      - name: Add External external panel tab
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_DIR=source/3105-1.1.1/ThreeOneOSFive
+          NAV_SWIFT="$APP_DIR/helpers/AppTabNavigationState.swift"
+          CONTENT_SWIFT="$APP_DIR/ContentView.swift"
+          python3 - "$NAV_SWIFT" "$CONTENT_SWIFT" <<'PY'
+          from pathlib import Path
+          import sys
+          nav, content = map(Path, sys.argv[1:])
+          n = nav.read_text()
+          if "    case patches\n" not in n:
+              n = n.replace("    case installed\n", "    case patches\n    case external\n", 1)
+          else:
+              n = n.replace("    case patches\n", "    case patches\n    case external\n", 1)
+          n = n.replace("case .home, .files, .patches:", "case .home, .files, .patches, .external:", 1)
+          nav.write_text(n)
+          c = content.read_text()
+          c = c.replace("AppSection.installed", "AppSection.patches")
+          c = c.replace("case .installed:", "case .patches:", 1)
+          c = c.replace("case .patches:\n            PatchProjectsView(\n                onOpenSettings: openSettings,\n                onOpenLogs: openLogs\n            )", "case .patches:\n            PatchProjectsView()", 1)
+          c = c.replace("        case .patches:\n            PatchProjectsView()", "        case .patches:\n            PatchProjectsView()\n        case .external:\n            ExternalPanelView()", 1)
+          c = c.replace("        case .installed: return \"tab.installed\"", "        case .patches: return \"Online\"\n        case .external: return \"External\"", 1)
+          c = c.replace("        case .installed: return \"tray.full.fill\"", "        case .patches: return \"scope\"\n        case .external: return \"gamecontroller.fill\"", 1)
+          c = c.replace("        .patchStorePresentation(patchStore)\n", "", 1)
+          content.write_text(c)
+          PY
+
+      - name: Add game card images only (online patches)
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_DIR=source/3105-1.1.1/ThreeOneOSFive
+          # Logos and .3105 patches are loaded from Railway at runtime; nothing is copied into the app bundle.
+          cat > source/3105-1.1.1/ThreeOneOSFive/views/PatchProjectsView.swift <<'SWIFT'
+          import SwiftUI
+          import UIKit
+          import CryptoKit
           
+          private struct PreloadedGame: Identifiable {
+              let id: String
+              let title: String
+              let bundleID: String
+              let patches: [PreloadedPatch]
+          }
+          
+          private struct PreloadedPatch: Identifiable, Hashable {
+              let id: String
+              let title: String
+              let fileName: String
+              let replacementCount: Int
+          }
+          
+          private let patchCatalog: [PreloadedPatch] = []
+          
+          private let freeFirePatchCatalog: [PreloadedPatch] = [
+              PreloadedPatch(id: "free-fire-0", title: "BALA MAGICA - ANTENA", fileName: "BALA MAGICA - ANTENA.3105", replacementCount: 1),
+              PreloadedPatch(id: "free-fire-1", title: "HS ALTO + PESCOCÇO", fileName: "HS ALTO + PESCOÇO .3105", replacementCount: 1),
+              PreloadedPatch(id: "free-fire-2", title: "HS ALTO", fileName: "HS ALTO.3105", replacementCount: 1),
+              PreloadedPatch(id: "free-fire-3", title: "HS BARRIGA V2", fileName: "HS BARRIGA V2.3105", replacementCount: 1),
+              PreloadedPatch(id: "free-fire-4", title: "HS CABECÇAO - ANTENA AVATAR", fileName: "HS CABEÇAO - ANTENA AVATAR.3105", replacementCount: 1),
+              PreloadedPatch(id: "free-fire-5", title: "HS IBIGO- ANTENA AVATAR", fileName: "HS IBIGO- ANTENA AVATAR.3105", replacementCount: 1),
+              PreloadedPatch(id: "free-fire-6", title: "HS PEITO CABECA BUGADA", fileName: "HS PEITO CABECA BUGADA.3105", replacementCount: 1),
+              PreloadedPatch(id: "free-fire-7", title: "HS PEITO LITE - ANTENA", fileName: "HS PEITO LITE - ANTENA.3105", replacementCount: 1),
+              PreloadedPatch(id: "free-fire-8", title: "HS PESCOCÇO  LITE - ANTENA", fileName: "HS PESCOÇO  LITE - ANTENA.3105", replacementCount: 1),
+              PreloadedPatch(id: "free-fire-9", title: "HS PESCOCÇO - ANTENA", fileName: "HS PESCOÇO - ANTENA.3105", replacementCount: 1),
+              PreloadedPatch(id: "free-fire-10", title: "HS PESCOCÇO MELHORADO", fileName: "HS PESCOÇO MELHORADO.3105", replacementCount: 1),
+              PreloadedPatch(id: "free-fire-11", title: "Holograma verde", fileName: "Holograma verde .3105", replacementCount: 1),
+          ]
+
+          private let preloadedGames: [PreloadedGame] = [
+              PreloadedGame(id: "free-fire", title: "FREE FIRE", bundleID: "com.dts.freefireth", patches: freeFirePatchCatalog),
+              PreloadedGame(id: "free-fire-max", title: "FREE FIRE MAX", bundleID: "com.dts.freefiremax", patches: patchCatalog)
+          ]
+          
+          private struct CompactFeature: Identifiable {
+              let id: String
+              let title: String
+              let subtitle: String
+              let icon: String
+              let patch: PreloadedPatch
+          }
+          
+          struct PatchProjectsView: View {
+              @StateObject private var store = PatchProjectStore()
+              @State private var selectedGameID = "free-fire"
+              @State private var remoteCatalog: [RemotePatchDescriptor]?
+              @State private var logoURLs: [String: String] = [:]
+              @AppStorage("patchesDarkMode") private var darkMode = false
+          
+              private var selectedGame: PreloadedGame {
+                  preloadedGames.first(where: { $0.id == selectedGameID }) ?? preloadedGames[0]
+              }
+          
+              private var features: [CompactFeature] {
+                  let visiblePatches: [PreloadedPatch] = {
+                      guard let remoteCatalog else { return selectedGame.patches }
+                      return remoteCatalog.filter { $0.game == selectedGameID }.map { item in
+                          PreloadedPatch(id: item.slug, title: item.title ?? item.fileName, fileName: item.fileName, replacementCount: 1)
+                      }
+                  }()
+                  return visiblePatches.enumerated().map { index, patch in
+                      CompactFeature(
+                          id: patch.id,
+                          title: patch.title,
+                          subtitle: "Recurso pré-carregado do Free Fire.",
+                          icon: index == 0 ? "scope" : (index == 1 ? "circle.grid.cross" : "antenna.radiowaves.left.and.right"),
+                          patch: patch
+                      )
+                  }
+              }
+
+              var body: some View {
+                  ZStack(alignment: .bottom) {
+                      (darkMode ? Color.black : Color(.systemGroupedBackground)).ignoresSafeArea()
+                      ScrollView(.vertical, showsIndicators: false) {
+                          VStack(alignment: .leading, spacing: 0) {
+                              header
+                              sectionTitle("SELECIONE O JOGO", top: 30)
+                              gameCards
+                              sectionTitle("FUNÇÕES DE AIMBOT", top: 28)
+                              Text("Recursos de precisão e desempenho")
+                                  .font(.system(size: 14, weight: .medium))
+                                  .foregroundStyle(muted)
+                                  .padding(.top, 7)
+                              featureList.padding(.top, 14)
+                          }
+                          .padding(.horizontal, 16)
+                          .padding(.top, 14)
+                          .padding(.bottom, 104)
+                      }
+                      bottomNav
+                  }
+                  .preferredColorScheme(darkMode ? .dark : .light)
+                  .toolbar(.hidden, for: .tabBar)
+                  .navigationBarHidden(true)
+                  .task {
+                      async let catalog = RemotePatchAPI.fetchCatalog()
+                      async let logos = RemotePatchAPI.fetchLogos()
+                      remoteCatalog = await catalog
+                      logoURLs = await logos
+                      logoURLs["free-fire"] = String(data: Data(base64Encoded: "aHR0cHM6Ly9maWxlcy5tYW51c2Nkbi5jb20vdXNlcl91cGxvYWRfYnlfbW9kdWxlL3Nlc3Npb25fZmlsZS8zMTA1MTk2NjM5MTI5Mzg3NjIvRVpxYnZ0Z0RZc0dJa0taWC5wbmc=")!, encoding: .utf8)!
+                      logoURLs["free-fire-max"] = String(data: Data(base64Encoded: "aHR0cHM6Ly9maWxlcy5tYW51c2Nkbi5jb20vdXNlcl91cGxvYWRfYnlfbW9kdWxlL3Nlc3Npb25fZmlsZS8zMTA1MTk2NjM5MTI5Mzg3NjIvV0xMdUtEZHFGbnhvbm9ybS5wbmc=")!, encoding: .utf8)!
+                  }
+              }
+          
+              private var fg: Color { darkMode ? .white : .black }
+              private var muted: Color { darkMode ? Color.white.opacity(0.56) : Color.black.opacity(0.54) }
+              private var panel: Color { darkMode ? Color.white.opacity(0.10) : .white }
+          
+              private var header: some View {
+                  ZStack {
+                      Text("FUNÇÕES EXTERNAL")
+                          .font(.system(size: 20, weight: .bold, design: .rounded))
+                          .foregroundStyle(fg)
+                          .frame(maxWidth: .infinity)
+                      HStack {
+                          Spacer()
+                          Button { darkMode.toggle() } label: {
+                              Image(systemName: darkMode ? "moon.fill" : "sun.max.fill")
+                                  .font(.system(size: 17, weight: .semibold))
+                                  .foregroundStyle(darkMode ? .white : .black)
+                                  .frame(width: 40, height: 40)
+                                  .background(panel, in: Circle())
+                          }
+                          .accessibilityLabel(darkMode ? "Tema noite" : "Tema dia")
+                      }
+                  }
+                  .frame(height: 42)
+              }
+          
+              private func sectionTitle(_ title: String, top: CGFloat) -> some View {
+                  Text(title)
+                      .font(.system(size: 18, weight: .bold, design: .rounded))
+                      .foregroundStyle(fg)
+                      .padding(.top, top)
+              }
+          
+              private var gameCards: some View {
+                  GeometryReader { proxy in
+                      let width = max(145, (proxy.size.width - 10) / 2)
+                      HStack(spacing: 10) {
+                          ForEach(preloadedGames) { game in
+                              Button { withAnimation(.easeInOut(duration: 0.18)) { selectedGameID = game.id } } label: {
+                                  VStack(alignment: .leading, spacing: 8) {
+                                      remoteLogo(url: logoURLs[game.id])
+                                          .frame(width: 42, height: 42)
+                                          .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                                      Text(game.title)
+                                          .font(.system(size: 13, weight: .bold))
+                                          .foregroundStyle(fg)
+                                          .lineLimit(1)
+                                      Text(selectedGameID == game.id ? "Selecionado" : "Toque para selecionar")
+                                          .font(.system(size: 11, weight: .medium))
+                                          .foregroundStyle(selectedGameID == game.id ? fg : muted)
+                                          .lineLimit(1)
+                                  }
+                                  .frame(maxWidth: .infinity, alignment: .leading)
+                                  .padding(12)
+                                  .frame(width: width, height: 116, alignment: .topLeading)
+                                  .background(panel, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                                  .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(selectedGameID == game.id ? fg.opacity(0.8) : fg.opacity(0.12), lineWidth: selectedGameID == game.id ? 1.5 : 1))
+                              }
+                              .buttonStyle(.plain)
+                          }
+                      }
+                  }
+                  .frame(height: 116)
+                  .padding(.top, 14)
+              }
+          
+              private var featureList: some View {
+                  VStack(spacing: 9) {
+                      ForEach(features) { feature in
+                          CompactPatchCard(feature: feature, store: store, darkMode: darkMode)
+                      }
+                  }
+              }
+          
+              private var bottomNav: some View {
+                  HStack(spacing: 4) {
+                      navItem(title: "Início", icon: "house.fill", active: false)
+                      navItem(title: "Injector", icon: "gamecontroller.fill", active: true)
+                  }
+                  .padding(5)
+                  .frame(width: 220, height: 62)
+                  .background(.ultraThinMaterial, in: Capsule())
+                  .overlay(Capsule().stroke(fg.opacity(0.12), lineWidth: 1))
+                  .padding(.bottom, 14)
+              }
+          
+              private func navItem(title: String, icon: String, active: Bool) -> some View {
+                  VStack(spacing: 3) {
+                      Image(systemName: icon).font(.system(size: 17, weight: .semibold))
+                      Text(title).font(.system(size: 11, weight: .bold))
+                  }
+                  .foregroundStyle(active ? .orange : fg)
+                  .frame(maxWidth: .infinity, maxHeight: .infinity)
+                  .background(active ? fg.opacity(0.10) : .clear, in: Capsule())
+              }
+          
+              @ViewBuilder
+              private func remoteLogo(url: String?) -> some View {
+                  if let url, let remoteURL = URL(string: url) {
+                      AsyncImage(url: remoteURL) { phase in
+                          if let image = phase.image { image.resizable().scaledToFill() } else { logoFallback }
+                      }
+                  } else { logoFallback }
+              }
+              private var logoFallback: some View {
+                  ZStack {
+                      RoundedRectangle(cornerRadius: 11).fill(fg.opacity(0.10))
+                      Image(systemName: "gamecontroller.fill").foregroundStyle(muted)
+                  }
+              }
+          }
+          
+          private struct CompactPatchCard: View {
+              let feature: CompactFeature
+              @ObservedObject var store: PatchProjectStore
+              let darkMode: Bool
+              @State private var isActive = false
+              @State private var activeReceipt: PatchTransactionReceipt?
+              @State private var isWorking = false
+              @State private var alertMessage: String?
+              @State private var activationToken = UUID()
+          
+              var body: some View {
+                  HStack(spacing: 12) {
+                      Image(systemName: feature.icon)
+                          .font(.system(size: 20, weight: .semibold))
+                          .foregroundStyle(darkMode ? .white : .black)
+                          .frame(width: 30)
+                      VStack(alignment: .leading, spacing: 3) {
+                          Text(feature.title).font(.system(size: 15, weight: .bold)).foregroundStyle(darkMode ? .white : .black)
+                          Text(feature.subtitle).font(.system(size: 11, weight: .medium)).foregroundStyle(darkMode ? Color.white.opacity(0.55) : Color.black.opacity(0.55)).lineLimit(2)
+                      }
+                      Spacer(minLength: 4)
+                      Toggle("", isOn: Binding(get: { isActive }, set: { on in
+                          guard !isWorking else { return }
+                          if on { applyPatch() } else { restorePatch() }
+                      }))
+                      .labelsHidden()
+                      .tint(darkMode ? .white : .black)
+                  }
+                  .padding(.horizontal, 14)
+                  .frame(minHeight: 72)
+                  .background(darkMode ? Color.white.opacity(0.10) : .white, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                  .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke((darkMode ? Color.white : Color.black).opacity(0.10), lineWidth: 1))
+                  .opacity(isWorking ? 0.6 : 1)
+                  .onAppear { synchronizeAppliedState() }
+                  .alert("Patch", isPresented: Binding(get: { alertMessage != nil }, set: { if !$0 { alertMessage = nil } })) {
+                      Button("OK", role: .cancel) { alertMessage = nil }
+                  } message: { Text(alertMessage ?? "") }
+              }
+          
+                  private func applyPatch() {
+                      isWorking = true
+                      let token = UUID()
+                      activationToken = token
+                      Task {
+                          do {
+                              guard let url = await RemotePatchAPI.resolve(patch: feature.patch) else {
+                                  throw NSError(domain: "RemotePatch", code: 404, userInfo: [NSLocalizedDescriptionKey: "Arquivo não encontrado online: \(feature.patch.fileName)"])
+                              }
+                          let data = try PatchProjectLibrary.readPackage(at: url)
+                          let decoded = try PatchPackageCodec.decode(data, password: nil)
+                          let receipt = try DevicePatchService.apply(project: decoded.project)
+                          await MainActor.run { activeReceipt = receipt; isActive = true; isWorking = false }
+                          try? await Task.sleep(nanoseconds: 5_000_000_000)
+                          await MainActor.run {
+                              guard activationToken == token, isActive else { return }
+                              restorePatch()
+                          }
+                      } catch {
+                          await MainActor.run { isWorking = false; alertMessage = error.localizedDescription }
+                      }
+                  }
+              }
+          
+              private func restorePatch() {
+                  activationToken = UUID()
+                  guard let receipt = activeReceipt ?? findAppliedProjectID().flatMap({ DevicePatchService.latestReceipt(projectID: $0) }) else { isActive = false; return }
+                  isWorking = true
+                  Task.detached(priority: .userInitiated) {
+                      do {
+                          try DevicePatchService.restore(receipt: receipt)
+                          await MainActor.run { activeReceipt = nil; isActive = false; isWorking = false }
+                      } catch {
+                          await MainActor.run { isWorking = false; alertMessage = error.localizedDescription }
+                      }
+                  }
+              }
+          
+              private func synchronizeAppliedState() {
+                  guard let projectID = findAppliedProjectID() else { return }
+                  let latest = DevicePatchService.latestReceipt(projectID: projectID)
+                  activeReceipt = latest
+                  isActive = latest != nil
+              }
+          
+              private func findAppliedProjectID() -> UUID? {
+                  guard let url = RemotePatchAPI.cachedFile(named: feature.patch.fileName), let data = try? PatchProjectLibrary.readPackage(at: url), let decoded = try? PatchPackageCodec.decode(data, password: nil) else { return nil }
+                  return decoded.project.id
+              }
+          }
+          
+          private struct RemotePatchDescriptor: Decodable {
+              let id: Int
+              let slug: String
+              let title: String?
+              let game: String
+              let fileName: String
+              let sha256: String
+              let sizeBytes: Int
+              let downloadUrl: String
+              let interfaceTab: String?
+              let section: String?
+          }
+          
+          private struct RemoteAnnouncement: Decodable {
+              let freeFireLogoUrl: String
+              let freeFireMaxLogoUrl: String
+          }
+
+          private struct RemotePatchCatalogResponse: Decodable {
+              let valid: Bool
+              let patches: [RemotePatchDescriptor]?
+          }
+          
+          private enum RemotePatchAPI {
+              private static let catalogURL = URL(string: String(data: Data(base64Encoded: "aHR0cHM6Ly9rbnpnZW4udXAucmFpbHdheS5hcHA=L2FwaS9wYXRjaGVzL2NhdGFsb2c=")!, encoding: .utf8)!)!
+              private static let announcementURL = URL(string: String(data: Data(base64Encoded: "aHR0cHM6Ly9rbnpnZW4udXAucmFpbHdheS5hcHA=L2FwaS9hbm5vdW5jZW1lbnQ=")!, encoding: .utf8)!)!
+              static func cachedFile(named name: String) -> URL? {
+                  let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("RemotePatches", isDirectory: true)
+                  let url = dir.appendingPathComponent(name)
+                  return FileManager.default.fileExists(atPath: url.path) ? url : nil
+              }
+              static func fetchLogos() async -> [String: String] {
+                  do {
+                      let (data, response) = try await URLSession.shared.data(from: announcementURL)
+                      guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return [:] }
+                      let announcement = try JSONDecoder().decode(RemoteAnnouncement.self, from: data)
+                      return ["free-fire": announcement.freeFireLogoUrl, "free-fire-max": announcement.freeFireMaxLogoUrl]
+                  } catch { return [:] }
+              }
+              static func fetchCatalog() async -> [RemotePatchDescriptor]? {
+                  guard let key = LicenseStore.storedKey else { return nil }
+                  do {
+                      var request = URLRequest(url: catalogURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+                      request.httpMethod = "POST"
+                      request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                      request.httpBody = try JSONSerialization.data(withJSONObject: ["key": key.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(), "device_id": UIDevice.current.identifierForVendor?.uuidString ?? "unknown-device", "package": Bundle.main.bundleIdentifier ?? "unknown.bundle", "app_version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0", "catalog": "online"])
+                      let (data, response) = try await URLSession.shared.data(for: request)
+                      guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), let catalog = try? JSONDecoder().decode(RemotePatchCatalogResponse.self, from: data), catalog.valid else { return nil }
+                      return catalog.patches
+                  } catch { return nil }
+              }
+              static func resolve(patch: PreloadedPatch) async -> URL? {
+                  guard let key = LicenseStore.storedKey else { return cachedFile(named: patch.fileName) }
+                  do {
+                      var request = URLRequest(url: catalogURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+                      request.httpMethod = "POST"
+                      request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                      request.httpBody = try JSONSerialization.data(withJSONObject: ["key": key.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(), "device_id": UIDevice.current.identifierForVendor?.uuidString ?? "unknown-device", "package": Bundle.main.bundleIdentifier ?? "unknown.bundle", "app_version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"])
+                      let (data, response) = try await URLSession.shared.data(for: request)
+                      guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), let catalog = try? JSONDecoder().decode(RemotePatchCatalogResponse.self, from: data), catalog.valid, let descriptor = catalog.patches?.first(where: { $0.fileName.precomposedStringWithCanonicalMapping == patch.fileName.precomposedStringWithCanonicalMapping }), let url = URL(string: descriptor.downloadUrl) else { return cachedFile(named: patch.fileName) }
+                      let (fileData, fileResponse) = try await URLSession.shared.data(from: url)
+                      guard let fileHTTP = fileResponse as? HTTPURLResponse, (200..<300).contains(fileHTTP.statusCode), fileData.count == descriptor.sizeBytes else { return cachedFile(named: patch.fileName) }
+                      let digest = SHA256.hash(data: fileData).map { String(format: "%02x", $0) }.joined()
+                      guard digest.caseInsensitiveCompare(descriptor.sha256) == .orderedSame else { return cachedFile(named: patch.fileName) }
+                      let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("RemotePatches", isDirectory: true)
+                      try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                      let destination = dir.appendingPathComponent(patch.fileName)
+                      try fileData.write(to: destination, options: .atomic)
+                      return destination
+                  } catch { return cachedFile(named: patch.fileName) }
+              }
+          }
+          SWIFT
+          cat > /tmp/external-panel.b64 <<'B64'
+          aW1wb3J0IFN3aWZ0VUkKaW1wb3J0IFVJS2l0Cgpwcml2YXRlIGZpbmFsIGNsYXNzIEV4dGVybmFs
+          RlBTTW9uaXRvcjogTlNPYmplY3QsIE9ic2VydmFibGVPYmplY3QgewogICAgQFB1Ymxpc2hlZCB2
+          YXIgZnBzID0gMAogICAgcHJpdmF0ZSB2YXIgZGlzcGxheUxpbms6IENBRGlzcGxheUxpbms/CiAg
+          ICBwcml2YXRlIHZhciBsYXN0VGltZXN0YW1wOiBDRlRpbWVJbnRlcnZhbCA9IDAKICAgIHByaXZh
+          dGUgdmFyIGZyYW1lcyA9IDAKCiAgICBmdW5jIHN0YXJ0KCkgewogICAgICAgIGd1YXJkIGRpc3Bs
+          YXlMaW5rID09IG5pbCBlbHNlIHsgcmV0dXJuIH0KICAgICAgICBsZXQgbGluayA9IENBRGlzcGxh
+          eUxpbmsodGFyZ2V0OiBzZWxmLCBzZWxlY3RvcjogI3NlbGVjdG9yKHRpY2soXzopKSkKICAgICAg
+          ICBsaW5rLmFkZCh0bzogLm1haW4sIGZvck1vZGU6IC5jb21tb24pCiAgICAgICAgZGlzcGxheUxp
+          bmsgPSBsaW5rCiAgICB9CgogICAgZnVuYyBzdG9wKCkgeyBkaXNwbGF5TGluaz8uaW52YWxpZGF0
+          ZSgpOyBkaXNwbGF5TGluayA9IG5pbCB9CgogICAgQG9iamMgcHJpdmF0ZSBmdW5jIHRpY2soXyBs
+          aW5rOiBDQURpc3BsYXlMaW5rKSB7CiAgICAgICAgaWYgbGFzdFRpbWVzdGFtcCA9PSAwIHsgbGFz
+          dFRpbWVzdGFtcCA9IGxpbmsudGltZXN0YW1wOyByZXR1cm4gfQogICAgICAgIGZyYW1lcyArPSAx
+          CiAgICAgICAgbGV0IGVsYXBzZWQgPSBsaW5rLnRpbWVzdGFtcCAtIGxhc3RUaW1lc3RhbXAKICAg
+          ICAgICBndWFyZCBlbGFwc2VkID49IDAuNSBlbHNlIHsgcmV0dXJuIH0KICAgICAgICBmcHMgPSBJ
+          bnQoKERvdWJsZShmcmFtZXMpIC8gZWxhcHNlZCkucm91bmRlZCgpKQogICAgICAgIGZyYW1lcyA9
+          IDAKICAgICAgICBsYXN0VGltZXN0YW1wID0gbGluay50aW1lc3RhbXAKICAgIH0KCiAgICBkZWlu
+          aXQgeyBzdG9wKCkgfQp9Cgpwcml2YXRlIHN0cnVjdCBFeHRlcm5hbENhdGFsb2dQYXRjaDogRGVj
+          b2RhYmxlLCBJZGVudGlmaWFibGUgewogICAgbGV0IGlkOiBJbnQKICAgIGxldCB0aXRsZTogU3Ry
+          aW5nCiAgICBsZXQgZ2FtZTogU3RyaW5nCiAgICBsZXQgZmlsZU5hbWU6IFN0cmluZwogICAgbGV0
+          IGRvd25sb2FkVXJsOiBTdHJpbmc/CiAgICB2YXIgaW50ZXJmYWNlVGFiOiBTdHJpbmc/CiAgICB2
+          YXIgc2VjdGlvbjogU3RyaW5nPwogICAgdmFyIGVuYWJsZWQgPSBmYWxzZQoKICAgIHByaXZhdGUg
+          ZW51bSBDb2RpbmdLZXlzOiBTdHJpbmcsIENvZGluZ0tleSB7IGNhc2UgaWQsIHRpdGxlLCBnYW1l
+          LCBmaWxlTmFtZSwgZG93bmxvYWRVcmwsIGludGVyZmFjZVRhYiwgc2VjdGlvbiB9CgogICAgaW5p
+          dChmcm9tIGRlY29kZXI6IERlY29kZXIpIHRocm93cyB7CiAgICAgICAgbGV0IGNvbnRhaW5lciA9
+          IHRyeSBkZWNvZGVyLmNvbnRhaW5lcihrZXllZEJ5OiBDb2RpbmdLZXlzLnNlbGYpCiAgICAgICAg
+          aWYgbGV0IHZhbHVlID0gdHJ5PyBjb250YWluZXIuZGVjb2RlKFN0cmluZy5zZWxmLCBmb3JLZXk6
+          IC5pZCkgewogICAgICAgICAgICBpZCA9IEludCh2YWx1ZSkgPz8gMAogICAgICAgIH0gZWxzZSBp
+          ZiBsZXQgdmFsdWUgPSB0cnk/IGNvbnRhaW5lci5kZWNvZGUoSW50LnNlbGYsIGZvcktleTogLmlk
+          KSB7CiAgICAgICAgICAgIGlkID0gdmFsdWUKICAgICAgICB9IGVsc2UgewogICAgICAgICAgICBp
+          ZCA9IDAKICAgICAgICB9CiAgICAgICAgdGl0bGUgPSAodHJ5PyBjb250YWluZXIuZGVjb2RlKFN0
+          cmluZy5zZWxmLCBmb3JLZXk6IC50aXRsZSkpID8/ICJSZWN1cnNvIgogICAgICAgIGdhbWUgPSAo
+          dHJ5PyBjb250YWluZXIuZGVjb2RlKFN0cmluZy5zZWxmLCBmb3JLZXk6IC5nYW1lKSkgPz8gIiIK
+          ICAgICAgICBmaWxlTmFtZSA9ICh0cnk/IGNvbnRhaW5lci5kZWNvZGUoU3RyaW5nLnNlbGYsIGZv
+          cktleTogLmZpbGVOYW1lKSkgPz8gIiIKICAgICAgICBkb3dubG9hZFVybCA9IHRyeT8gY29udGFp
+          bmVyLmRlY29kZShTdHJpbmcuc2VsZiwgZm9yS2V5OiAuZG93bmxvYWRVcmwpCiAgICAgICAgaW50
+          ZXJmYWNlVGFiID0gdHJ5PyBjb250YWluZXIuZGVjb2RlKFN0cmluZy5zZWxmLCBmb3JLZXk6IC5p
+          bnRlcmZhY2VUYWIpCiAgICAgICAgc2VjdGlvbiA9IHRyeT8gY29udGFpbmVyLmRlY29kZShTdHJp
+          bmcuc2VsZiwgZm9yS2V5OiAuc2VjdGlvbikKICAgIH0KfQoKcHJpdmF0ZSBzdHJ1Y3QgRXh0ZXJu
+          YWxDYXRhbG9nUmVzcG9uc2U6IERlY29kYWJsZSB7CiAgICBsZXQgdmFsaWQ6IEJvb2wKICAgIGxl
+          dCBwYXRjaGVzOiBbRXh0ZXJuYWxDYXRhbG9nUGF0Y2hdPwogICAgbGV0IG1lc3NhZ2U6IFN0cmlu
+          Zz8KfQpwcml2YXRlIHN0cnVjdCBFeHRlcm5hbFVwZGF0ZUFubm91bmNlbWVudDogRGVjb2RhYmxl
+          IHsKICAgIGxldCBhbm5vdW5jZW1lbnQ6IFN0cmluZz8KICAgIGxldCB1cmw6IFN0cmluZz8KfQoK
+          c3RydWN0IEV4dGVybmFsUGFuZWxWaWV3OiBWaWV3IHsKICAgIHByaXZhdGUgZW51bSBDYXRlZ29y
+          eTogU3RyaW5nLCBDYXNlSXRlcmFibGUsIElkZW50aWZpYWJsZSB7CiAgICAgICAgY2FzZSBmdW5j
+          dGlvbnMgPSAiRnVuw6fDtWVzIgogICAgICAgIGNhc2UgZXNwID0gIkVTUCIKICAgICAgICBjYXNl
+          IHRvb2xzID0gIkV4dHJhcy9GZXJyYW1lbnRhcyIKICAgICAgICBjYXNlIHByb2ZpbGUgPSAiUGVy
+          ZmlsIgogICAgICAgIHZhciBpZDogU3RyaW5nIHsgcmF3VmFsdWUgfQogICAgICAgIHZhciBpY29u
+          OiBTdHJpbmcgewogICAgICAgICAgICBzd2l0Y2ggc2VsZiB7CiAgICAgICAgICAgIGNhc2UgLmZ1
+          bmN0aW9uczogcmV0dXJuICJzY29wZSIKICAgICAgICAgICAgY2FzZSAuZXNwOiByZXR1cm4gImV5
+          ZS5maWxsIgogICAgICAgICAgICBjYXNlIC50b29sczogcmV0dXJuICJ3cmVuY2guYW5kLnNjcmV3
+          ZHJpdmVyLmZpbGwiCiAgICAgICAgICAgIGNhc2UgLnByb2ZpbGU6IHJldHVybiAicGVyc29uLmNy
+          b3AuY2lyY2xlLmZpbGwiCiAgICAgICAgICAgIH0KICAgICAgICB9CiAgICAgICAgdmFyIGFwaU5h
+          bWVzOiBTZXQ8U3RyaW5nPiB7CiAgICAgICAgICAgIHN3aXRjaCBzZWxmIHsKICAgICAgICAgICAg
+          Y2FzZSAuZnVuY3Rpb25zOiByZXR1cm4gWyJNSVJBIiwgIkFJTSIsICJGVU7Dh8OVRVMiLCAiRlVO
+          Q1RJT05TIl0KICAgICAgICAgICAgY2FzZSAuZXNwOiByZXR1cm4gWyJFU1AiLCAiUkFJTy1YIiwg
+          IlhSQVkiXQogICAgICAgICAgICBjYXNlIC50b29sczogcmV0dXJuIFsiR0VSQUwiLCAiT1VUUk9T
+          IiwgIkVYVFJBUy9GRVJSQU1FTlRBUyIsICJFWFRSQVMiLCAiRkVSUkFNRU5UQVMiLCAiVE9PTFMi
+          XQogICAgICAgICAgICBjYXNlIC5wcm9maWxlOiByZXR1cm4gWyJQRVJGSUwiLCAiUFJPRklMRSJd
+          CiAgICAgICAgICAgIH0KICAgICAgICB9CiAgICB9CgogICAgcHJpdmF0ZSBlbnVtIEFjY2VudFRo
+          ZW1lOiBTdHJpbmcsIENhc2VJdGVyYWJsZSwgSWRlbnRpZmlhYmxlIHsKICAgICAgICBjYXNlIHJl
+          ZCwgYmx1ZSwgZ3JlZW4sIHBpbmsKICAgICAgICB2YXIgaWQ6IFN0cmluZyB7IHJhd1ZhbHVlIH0K
+          ICAgICAgICB2YXIgY29sb3I6IENvbG9yIHsKICAgICAgICAgICAgc3dpdGNoIHNlbGYgewogICAg
+          ICAgICAgICBjYXNlIC5yZWQ6IHJldHVybiBDb2xvcihyZWQ6IDAuOTUsIGdyZWVuOiAwLjEyLCBi
+          bHVlOiAwLjIwKQogICAgICAgICAgICBjYXNlIC5ibHVlOiByZXR1cm4gQ29sb3IocmVkOiAwLjE2
+          LCBncmVlbjogMC40OCwgYmx1ZTogMS4wKQogICAgICAgICAgICBjYXNlIC5ncmVlbjogcmV0dXJu
+          IENvbG9yKHJlZDogMC4xNiwgZ3JlZW46IDAuNzgsIGJsdWU6IDAuNDIpCiAgICAgICAgICAgIGNh
+          c2UgLnBpbms6IHJldHVybiBDb2xvcihyZWQ6IDAuOTUsIGdyZWVuOiAwLjIyLCBibHVlOiAwLjYy
+          KQogICAgICAgICAgICB9CiAgICAgICAgfQogICAgfQoKICAgIEBFbnZpcm9ubWVudChcLmRpc21p
+          c3MpIHByaXZhdGUgdmFyIGRpc21pc3MKICAgIEBTdGF0ZSBwcml2YXRlIHZhciBjYXRlZ29yeTog
+          Q2F0ZWdvcnkgPSAuZnVuY3Rpb25zCiAgICBAU3RhdGUgcHJpdmF0ZSB2YXIgdGhlbWU6IEFjY2Vu
+          dFRoZW1lID0gLnJlZAogICAgQFN0YXRlIHByaXZhdGUgdmFyIGxpZ2h0TW9kZSA9IGZhbHNlCiAg
+          ICBAU3RhdGUgcHJpdmF0ZSB2YXIgbGFuZ3VhZ2VFbmdsaXNoID0gZmFsc2UKICAgIEBTdGF0ZU9i
+          amVjdCBwcml2YXRlIHZhciBmcHNNb25pdG9yID0gRXh0ZXJuYWxGUFNNb25pdG9yKCkKICAgIEBT
+          dGF0ZSBwcml2YXRlIHZhciBwYXRjaGVzOiBbRXh0ZXJuYWxDYXRhbG9nUGF0Y2hdID0gW10KICAg
+          IEBTdGF0ZSBwcml2YXRlIHZhciBsb2FkaW5nID0gZmFsc2UKICAgIEBTdGF0ZSBwcml2YXRlIHZh
+          ciBsYXN0RXJyb3I6IFN0cmluZz8KICAgIEBTdGF0ZSBwcml2YXRlIHZhciBhY3Rpb25FcnJvcjog
+          U3RyaW5nPwogICAgQFN0YXRlIHByaXZhdGUgdmFyIHdvcmtpbmdJRHM6IFNldDxJbnQ+ID0gW10K
+          ICAgIEBTdGF0ZSBwcml2YXRlIHZhciByZWNlaXB0czogW0ludDogUGF0Y2hUcmFuc2FjdGlvblJl
+          Y2VpcHRdID0gWzpdCiAgICBAU3RhdGUgcHJpdmF0ZSB2YXIgYWN0aXZhdGlvblRva2VuczogW0lu
+          dDogVVVJRF0gPSBbOl0KICAgIEBTdGF0ZSBwcml2YXRlIHZhciBsaWNlbnNlRXhwaXJlc0F0OiBE
+          YXRlPyA9IExpY2Vuc2VTdG9yZS5wcm9maWxlU25hcHNob3QuZmxhdE1hcCB7IHJhdyBpbgogICAg
+          ICAgIGd1YXJkIGxldCB2YWx1ZSA9IHJhdy5leHBpcmVzQXQgZWxzZSB7IHJldHVybiBuaWwgfQog
+          ICAgICAgIHJldHVybiBFeHRlcm5hbFBhbmVsVmlldy5wYXJzZUlTT0RhdGUodmFsdWUpCiAgICB9
+          CiAgICBAU3RhdGUgcHJpdmF0ZSB2YXIgdXBkYXRlQW5ub3VuY2VtZW50OiBFeHRlcm5hbFVwZGF0
+          ZUFubm91bmNlbWVudD8KCiAgICBwcml2YXRlIHZhciBhY2NlbnQ6IENvbG9yIHsgdGhlbWUuY29s
+          b3IgfQogICAgcHJpdmF0ZSB2YXIgcGFnZUJhY2tncm91bmQ6IENvbG9yIHsgbGlnaHRNb2RlID8g
+          Q29sb3IocmVkOiAwLjkzLCBncmVlbjogMC45NCwgYmx1ZTogMC45NykgOiBDb2xvcihyZWQ6IDAu
+          MDI1LCBncmVlbjogMC4wMjcsIGJsdWU6IDAuMDM1KSB9CiAgICBwcml2YXRlIHZhciBwYW5lbEJh
+          Y2tncm91bmQ6IENvbG9yIHsgbGlnaHRNb2RlID8gQ29sb3Iud2hpdGUub3BhY2l0eSgwLjkwKSA6
+          IENvbG9yLndoaXRlLm9wYWNpdHkoMC4wNzUpIH0KICAgIHByaXZhdGUgdmFyIGNhcmRCYWNrZ3Jv
+          dW5kOiBDb2xvciB7IGxpZ2h0TW9kZSA/IENvbG9yLndoaXRlIDogQ29sb3Iud2hpdGUub3BhY2l0
+          eSgwLjA2NSkgfQogICAgcHJpdmF0ZSB2YXIgcHJpbWFyeVRleHQ6IENvbG9yIHsgbGlnaHRNb2Rl
+          ID8gQ29sb3IuYmxhY2sub3BhY2l0eSgwLjg2KSA6IC53aGl0ZSB9CiAgICBwcml2YXRlIHZhciBz
+          ZWNvbmRhcnlUZXh0OiBDb2xvciB7IGxpZ2h0TW9kZSA/IENvbG9yLmJsYWNrLm9wYWNpdHkoMC41
+          MikgOiBDb2xvci53aGl0ZS5vcGFjaXR5KDAuNTIpIH0KICAgIHByaXZhdGUgdmFyIHNlbGVjdGVk
+          UGF0Y2hlczogW0V4dGVybmFsQ2F0YWxvZ1BhdGNoXSB7CiAgICAgICAgcGF0Y2hlcy5maWx0ZXIg
+          eyBwYXRjaCBpbgogICAgICAgICAgICBndWFyZCBjYXRlZ29yeSAhPSAucHJvZmlsZSBlbHNlIHsg
+          cmV0dXJuIGZhbHNlIH0KICAgICAgICAgICAgbGV0IHJhdyA9IHBhdGNoLmludGVyZmFjZVRhYiA/
+          PyBwYXRjaC5zZWN0aW9uID8/IHBhdGNoLmdhbWUKICAgICAgICAgICAgbGV0IHRva2VucyA9IHJh
+          dy51cHBlcmNhc2VkKCkuc3BsaXQoc2VwYXJhdG9yOiAiOiIpLm1hcChTdHJpbmcuaW5pdCkKICAg
+          ICAgICAgICAgcmV0dXJuIGNhdGVnb3J5LmFwaU5hbWVzLmNvbnRhaW5zIHsgdG9rZW5zLmNvbnRh
+          aW5zKCQwKSB8fCByYXcudXBwZXJjYXNlZCgpLmNvbnRhaW5zKCQwKSB9CiAgICAgICAgfQogICAg
+          fQoKICAgIHZhciBib2R5OiBzb21lIFZpZXcgewogICAgICAgIFpTdGFjayB7CiAgICAgICAgICAg
+          IHBhZ2VCYWNrZ3JvdW5kLmlnbm9yZXNTYWZlQXJlYSgpCiAgICAgICAgICAgIEhTdGFjayhzcGFj
+          aW5nOiAwKSB7CiAgICAgICAgICAgICAgICBzaWRlYmFyCiAgICAgICAgICAgICAgICBEaXZpZGVy
+          KCkub3ZlcmxheShhY2NlbnQub3BhY2l0eSgwLjI4KSkucGFkZGluZygudmVydGljYWwsIDE0KQog
+          ICAgICAgICAgICAgICAgbWFpbkNvbnRlbnQKICAgICAgICAgICAgfQogICAgICAgICAgICAucGFk
+          ZGluZygxMikKICAgICAgICAgICAgLmJhY2tncm91bmQocGFuZWxCYWNrZ3JvdW5kLCBpbjogUm91
+          bmRlZFJlY3RhbmdsZShjb3JuZXJSYWRpdXM6IDI2LCBzdHlsZTogLmNvbnRpbnVvdXMpKQogICAg
+          ICAgICAgICAub3ZlcmxheShSb3VuZGVkUmVjdGFuZ2xlKGNvcm5lclJhZGl1czogMjYsIHN0eWxl
+          OiAuY29udGludW91cykuc3Ryb2tlKGFjY2VudC5vcGFjaXR5KDAuMjgpLCBsaW5lV2lkdGg6IDEp
+          KQogICAgICAgICAgICAucGFkZGluZyguaG9yaXpvbnRhbCwgMTApCiAgICAgICAgICAgIC5wYWRk
+          aW5nKC52ZXJ0aWNhbCwgMTgpCiAgICAgICAgfQogICAgICAgIC5wcmVmZXJyZWRDb2xvclNjaGVt
+          ZShsaWdodE1vZGUgPyAubGlnaHQgOiAuZGFyaykKICAgICAgICAuYW5pbWF0aW9uKC5lYXNlSW5P
+          dXQoZHVyYXRpb246IDAuMjIpLCB2YWx1ZTogY2F0ZWdvcnkpCiAgICAgICAgLmFuaW1hdGlvbigu
+          ZWFzZUluT3V0KGR1cmF0aW9uOiAwLjIyKSwgdmFsdWU6IHRoZW1lKQogICAgICAgIC5hbmltYXRp
+          b24oLmVhc2VJbk91dChkdXJhdGlvbjogMC4yMiksIHZhbHVlOiBsaWdodE1vZGUpCiAgICAgICAg
+          LnRhc2sgewogICAgICAgICAgICBmcHNNb25pdG9yLnN0YXJ0KCkKICAgICAgICAgICAgd2hpbGUg
+          IVRhc2suaXNDYW5jZWxsZWQgewogICAgICAgICAgICAgICAgYXdhaXQgbG9hZENhdGFsb2coKQog
+          ICAgICAgICAgICAgICAgYXdhaXQgcmVmcmVzaFByb2ZpbGUoKQogICAgICAgICAgICAgICAgdHJ5
+          PyBhd2FpdCBUYXNrLnNsZWVwKG5hbm9zZWNvbmRzOiAxNV8wMDBfMDAwXzAwMCkKICAgICAgICAg
+          ICAgfQogICAgICAgIH0KICAgICAgICAub25EaXNhcHBlYXIgeyBmcHNNb25pdG9yLnN0b3AoKSB9
+          CiAgICB9CgogICAgcHJpdmF0ZSB2YXIgc2lkZWJhcjogc29tZSBWaWV3IHsKICAgICAgICBWU3Rh
+          Y2soc3BhY2luZzogMTApIHsKICAgICAgICAgICAgSW1hZ2Uoc3lzdGVtTmFtZTogImdhbWVjb250
+          cm9sbGVyLmZpbGwiKQogICAgICAgICAgICAgICAgLmZvbnQoLnN5c3RlbShzaXplOiAxOSwgd2Vp
+          Z2h0OiAuYm9sZCkpCiAgICAgICAgICAgICAgICAuZm9yZWdyb3VuZFN0eWxlKGFjY2VudCkKICAg
+          ICAgICAgICAgICAgIC5mcmFtZSh3aWR0aDogNDIsIGhlaWdodDogNDIpCiAgICAgICAgICAgICAg
+          ICAuYmFja2dyb3VuZChhY2NlbnQub3BhY2l0eSgwLjEzKSwgaW46IFJvdW5kZWRSZWN0YW5nbGUo
+          Y29ybmVyUmFkaXVzOiAxMywgc3R5bGU6IC5jb250aW51b3VzKSkKICAgICAgICAgICAgICAgIC5w
+          YWRkaW5nKC5ib3R0b20sIDYpCiAgICAgICAgICAgIEZvckVhY2goQ2F0ZWdvcnkuYWxsQ2FzZXMp
+          IHsgaXRlbSBpbgogICAgICAgICAgICAgICAgQnV0dG9uIHsgY2F0ZWdvcnkgPSBpdGVtIH0gbGFi
+          ZWw6IHsKICAgICAgICAgICAgICAgICAgICBWU3RhY2soc3BhY2luZzogNSkgewogICAgICAgICAg
+          ICAgICAgICAgICAgICBJbWFnZShzeXN0ZW1OYW1lOiBpdGVtLmljb24pLmZvbnQoLnN5c3RlbShz
+          aXplOiAxNywgd2VpZ2h0OiAuc2VtaWJvbGQpKQogICAgICAgICAgICAgICAgICAgICAgICBUZXh0
+          KGl0ZW0ucmF3VmFsdWUgPT0gIkV4dHJhcy9GZXJyYW1lbnRhcyIgPyAiRXh0cmFzIiA6IGl0ZW0u
+          cmF3VmFsdWUpCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAuZm9udCguc3lzdGVtKHNpemU6
+          IDgsIHdlaWdodDogLmJvbGQpKQogICAgICAgICAgICAgICAgICAgICAgICAgICAgLmxpbmVMaW1p
+          dCgxKQogICAgICAgICAgICAgICAgICAgIH0KICAgICAgICAgICAgICAgICAgICAuZm9yZWdyb3Vu
+          ZFN0eWxlKGNhdGVnb3J5ID09IGl0ZW0gPyAud2hpdGUgOiBzZWNvbmRhcnlUZXh0KQogICAgICAg
+          ICAgICAgICAgICAgIC5mcmFtZSh3aWR0aDogNjQsIGhlaWdodDogNTYpCiAgICAgICAgICAgICAg
+          ICAgICAgLmJhY2tncm91bmQoY2F0ZWdvcnkgPT0gaXRlbSA/IGFjY2VudCA6IENvbG9yLmNsZWFy
+          LCBpbjogUm91bmRlZFJlY3RhbmdsZShjb3JuZXJSYWRpdXM6IDE0LCBzdHlsZTogLmNvbnRpbnVv
+          dXMpKQogICAgICAgICAgICAgICAgICAgIC5vdmVybGF5KFJvdW5kZWRSZWN0YW5nbGUoY29ybmVy
+          UmFkaXVzOiAxNCwgc3R5bGU6IC5jb250aW51b3VzKS5zdHJva2UoYWNjZW50Lm9wYWNpdHkoY2F0
+          ZWdvcnkgPT0gaXRlbSA/IDAuOTUgOiAwLjE4KSwgbGluZVdpZHRoOiAxKSkKICAgICAgICAgICAg
+          ICAgIH0KICAgICAgICAgICAgICAgIC5idXR0b25TdHlsZSgucGxhaW4pCiAgICAgICAgICAgIH0K
+          ICAgICAgICAgICAgU3BhY2VyKG1pbkxlbmd0aDogMTApCiAgICAgICAgICAgIHRoZW1lRG90cwog
+          ICAgICAgIH0KICAgICAgICAuZnJhbWUod2lkdGg6IDcyKQogICAgICAgIC5wYWRkaW5nKC52ZXJ0
+          aWNhbCwgNCkKICAgIH0KCiAgICBwcml2YXRlIHZhciB0aGVtZURvdHM6IHNvbWUgVmlldyB7CiAg
+          ICAgICAgVlN0YWNrKHNwYWNpbmc6IDcpIHsKICAgICAgICAgICAgRm9yRWFjaChBY2NlbnRUaGVt
+          ZS5hbGxDYXNlcykgeyBpdGVtIGluCiAgICAgICAgICAgICAgICBCdXR0b24geyB0aGVtZSA9IGl0
+          ZW0gfSBsYWJlbDogewogICAgICAgICAgICAgICAgICAgIENpcmNsZSgpLmZpbGwoaXRlbS5jb2xv
+          cikuZnJhbWUod2lkdGg6IDE0LCBoZWlnaHQ6IDE0KQogICAgICAgICAgICAgICAgICAgICAgICAu
+          b3ZlcmxheShDaXJjbGUoKS5zdHJva2UocHJpbWFyeVRleHQsIGxpbmVXaWR0aDogdGhlbWUgPT0g
+          aXRlbSA/IDIgOiAwKSkKICAgICAgICAgICAgICAgIH0uYnV0dG9uU3R5bGUoLnBsYWluKQogICAg
+          ICAgICAgICB9CiAgICAgICAgfQogICAgfQoKICAgIHByaXZhdGUgdmFyIG1haW5Db250ZW50OiBz
+          b21lIFZpZXcgewogICAgICAgIFZTdGFjayhhbGlnbm1lbnQ6IC5sZWFkaW5nLCBzcGFjaW5nOiAx
+          NCkgewogICAgICAgICAgICBIU3RhY2soc3BhY2luZzogOCkgewogICAgICAgICAgICAgICAgSFN0
+          YWNrKHNwYWNpbmc6IDgpIHsKICAgICAgICAgICAgICAgICAgICBJbWFnZShzeXN0ZW1OYW1lOiBj
+          YXRlZ29yeS5pY29uKS5mb3JlZ3JvdW5kU3R5bGUoYWNjZW50KQogICAgICAgICAgICAgICAgICAg
+          IFRleHQoY2F0ZWdvcnlUaXRsZSkuZm9udCguc3lzdGVtKHNpemU6IDE2LCB3ZWlnaHQ6IC5ib2xk
+          LCBkZXNpZ246IC5yb3VuZGVkKSkuZm9yZWdyb3VuZFN0eWxlKHByaW1hcnlUZXh0KQogICAgICAg
+          ICAgICAgICAgfQogICAgICAgICAgICAgICAgLnBhZGRpbmcoLmhvcml6b250YWwsIDEzKS5wYWRk
+          aW5nKC52ZXJ0aWNhbCwgOSkKICAgICAgICAgICAgICAgIC5iYWNrZ3JvdW5kKGFjY2VudC5vcGFj
+          aXR5KDAuMTMpLCBpbjogQ2Fwc3VsZSgpKQogICAgICAgICAgICAgICAgLm92ZXJsYXkoQ2Fwc3Vs
+          ZSgpLnN0cm9rZShhY2NlbnQub3BhY2l0eSgwLjQ1KSwgbGluZVdpZHRoOiAxKSkKICAgICAgICAg
+          ICAgICAgIFNwYWNlcigpCiAgICAgICAgICAgICAgICBCdXR0b24geyBsaWdodE1vZGUudG9nZ2xl
+          KCkgfSBsYWJlbDogewogICAgICAgICAgICAgICAgICAgIEltYWdlKHN5c3RlbU5hbWU6IGxpZ2h0
+          TW9kZSA/ICJtb29uLmZpbGwiIDogInN1bi5tYXguZmlsbCIpCiAgICAgICAgICAgICAgICAgICAg
+          ICAgIC5mb3JlZ3JvdW5kU3R5bGUoYWNjZW50KS5mcmFtZSh3aWR0aDogMzQsIGhlaWdodDogMzQp
+          CiAgICAgICAgICAgICAgICAgICAgICAgIC5iYWNrZ3JvdW5kKGNhcmRCYWNrZ3JvdW5kLCBpbjog
+          Q2lyY2xlKCkpCiAgICAgICAgICAgICAgICB9LmJ1dHRvblN0eWxlKC5wbGFpbikKICAgICAgICAg
+          ICAgICAgIEJ1dHRvbiB7IGxhbmd1YWdlRW5nbGlzaC50b2dnbGUoKSB9IGxhYmVsOiB7CiAgICAg
+          ICAgICAgICAgICAgICAgVGV4dChsYW5ndWFnZUVuZ2xpc2ggPyAiRU4iIDogIlBUIikKICAgICAg
+          ICAgICAgICAgICAgICAgICAgLmZvbnQoLnN5c3RlbShzaXplOiAxMCwgd2VpZ2h0OiAuYm9sZCkp
+          CiAgICAgICAgICAgICAgICAgICAgICAgIC5mb3JlZ3JvdW5kU3R5bGUoYWNjZW50KS5mcmFtZSh3
+          aWR0aDogMzQsIGhlaWdodDogMzQpCiAgICAgICAgICAgICAgICAgICAgICAgIC5iYWNrZ3JvdW5k
+          KGNhcmRCYWNrZ3JvdW5kLCBpbjogQ2lyY2xlKCkpCiAgICAgICAgICAgICAgICB9LmJ1dHRvblN0
+          eWxlKC5wbGFpbikKICAgICAgICAgICAgICAgIEJ1dHRvbiB7IGRpc21pc3MoKSB9IGxhYmVsOiB7
+          CiAgICAgICAgICAgICAgICAgICAgSW1hZ2Uoc3lzdGVtTmFtZTogInhtYXJrIikuZm9udCguc3lz
+          dGVtKHNpemU6IDEzLCB3ZWlnaHQ6IC5ib2xkKSkKICAgICAgICAgICAgICAgICAgICAgICAgLmZv
+          cmVncm91bmRTdHlsZShzZWNvbmRhcnlUZXh0KS5mcmFtZSh3aWR0aDogMzQsIGhlaWdodDogMzQp
+          CiAgICAgICAgICAgICAgICAgICAgICAgIC5iYWNrZ3JvdW5kKGNhcmRCYWNrZ3JvdW5kLCBpbjog
+          Q2lyY2xlKCkpCiAgICAgICAgICAgICAgICB9LmJ1dHRvblN0eWxlKC5wbGFpbikKICAgICAgICAg
+          ICAgfQogICAgICAgICAgICBpZiBjYXRlZ29yeSA9PSAucHJvZmlsZSB7IHByb2ZpbGVDb250ZW50
+          IH0gZWxzZSB7IHJlc291cmNlQ29udGVudCB9CiAgICAgICAgICAgIFNwYWNlcihtaW5MZW5ndGg6
+          IDApCiAgICAgICAgfQogICAgICAgIC5wYWRkaW5nKC5sZWFkaW5nLCAxNCkKICAgICAgICAucGFk
+          ZGluZygudmVydGljYWwsIDQpCiAgICAgICAgLmZyYW1lKG1heFdpZHRoOiAuaW5maW5pdHksIG1h
+          eEhlaWdodDogLmluZmluaXR5LCBhbGlnbm1lbnQ6IC50b3BMZWFkaW5nKQogICAgfQoKICAgIHBy
+          aXZhdGUgdmFyIHJlc291cmNlQ29udGVudDogc29tZSBWaWV3IHsKICAgICAgICBTY3JvbGxWaWV3
+          KC52ZXJ0aWNhbCwgc2hvd3NJbmRpY2F0b3JzOiBmYWxzZSkgewogICAgICAgICAgICBWU3RhY2so
+          YWxpZ25tZW50OiAubGVhZGluZywgc3BhY2luZzogMTApIHsKICAgICAgICAgICAgICAgIEhTdGFj
+          ayB7CiAgICAgICAgICAgICAgICAgICAgVGV4dChjYXRlZ29yeSA9PSAuZnVuY3Rpb25zID8gIkZ1
+          bsOnw7VlcyBkaXNwb27DrXZlaXMiIDogY2F0ZWdvcnkucmF3VmFsdWUpCiAgICAgICAgICAgICAg
+          ICAgICAgICAgIC5mb250KC5zeXN0ZW0oc2l6ZTogMTMsIHdlaWdodDogLnNlbWlib2xkKSkuZm9y
+          ZWdyb3VuZFN0eWxlKHNlY29uZGFyeVRleHQpCiAgICAgICAgICAgICAgICAgICAgU3BhY2VyKCkK
+          ICAgICAgICAgICAgICAgICAgICBpZiBsb2FkaW5nIHsgUHJvZ3Jlc3NWaWV3KCkudGludChhY2Nl
+          bnQpLnNjYWxlRWZmZWN0KDAuOCkgfQogICAgICAgICAgICAgICAgfQogICAgICAgICAgICAgICAg
+          aWYgIWxvYWRpbmcgJiYgc2VsZWN0ZWRQYXRjaGVzLmlzRW1wdHkgewogICAgICAgICAgICAgICAg
+          ICAgIGVtcHR5Q2FyZAogICAgICAgICAgICAgICAgfSBlbHNlIHsKICAgICAgICAgICAgICAgICAg
+          ICBGb3JFYWNoKHNlbGVjdGVkUGF0Y2hlcykgeyBwYXRjaCBpbiBvcHRpb25DYXJkKHBhdGNoKSB9
+          CiAgICAgICAgICAgICAgICB9CiAgICAgICAgICAgIH0KICAgICAgICB9CiAgICB9CgogICAgcHJp
+          dmF0ZSB2YXIgZW1wdHlDYXJkOiBzb21lIFZpZXcgewogICAgICAgIFZTdGFjayhzcGFjaW5nOiA3
+          KSB7CiAgICAgICAgICAgIEltYWdlKHN5c3RlbU5hbWU6ICJzcXVhcmUuZGFzaGVkIikuZm9udCgu
+          c3lzdGVtKHNpemU6IDI0KSkuZm9yZWdyb3VuZFN0eWxlKGFjY2VudCkKICAgICAgICAgICAgVGV4
+          dChsYXN0RXJyb3IgPz8gIk5lbmh1bWEgb3DDp8OjbyBwdWJsaWNhZGEgcGVsYSBBUEkuIikuZm9u
+          dCguc3lzdGVtKHNpemU6IDEyLCB3ZWlnaHQ6IC5tZWRpdW0pKS5mb3JlZ3JvdW5kU3R5bGUoc2Vj
+          b25kYXJ5VGV4dCkubXVsdGlsaW5lVGV4dEFsaWdubWVudCguY2VudGVyKQogICAgICAgIH0KICAg
+          ICAgICAuZnJhbWUobWF4V2lkdGg6IC5pbmZpbml0eSkucGFkZGluZygudmVydGljYWwsIDM0KQog
+          ICAgICAgIC5iYWNrZ3JvdW5kKGNhcmRCYWNrZ3JvdW5kLCBpbjogUm91bmRlZFJlY3RhbmdsZShj
+          b3JuZXJSYWRpdXM6IDE2LCBzdHlsZTogLmNvbnRpbnVvdXMpKQogICAgfQoKICAgIHByaXZhdGUg
+          dmFyIGNhdGVnb3J5VGl0bGU6IFN0cmluZyB7CiAgICAgICAgaWYgIWxhbmd1YWdlRW5nbGlzaCB7
+          IHJldHVybiBjYXRlZ29yeS5yYXdWYWx1ZSB9CiAgICAgICAgc3dpdGNoIGNhdGVnb3J5IHsKICAg
+          ICAgICBjYXNlIC5mdW5jdGlvbnM6IHJldHVybiAiRnVuY3Rpb25zIgogICAgICAgIGNhc2UgLmVz
+          cDogcmV0dXJuICJFU1AiCiAgICAgICAgY2FzZSAudG9vbHM6IHJldHVybiAiRXh0cmFzL1Rvb2xz
+          IgogICAgICAgIGNhc2UgLnByb2ZpbGU6IHJldHVybiAiUHJvZmlsZSIKICAgICAgICB9CiAgICB9
+          CgogICAgcHJpdmF0ZSB2YXIgcHJvZmlsZUNvbnRlbnQ6IHNvbWUgVmlldyB7CiAgICAgICAgU2Ny
+          b2xsVmlldygudmVydGljYWwsIHNob3dzSW5kaWNhdG9yczogZmFsc2UpIHsKICAgICAgICAgICAg
+          VlN0YWNrKGFsaWdubWVudDogLmxlYWRpbmcsIHNwYWNpbmc6IDEwKSB7CiAgICAgICAgICAgICAg
+          ICBUZXh0KGxhbmd1YWdlRW5nbGlzaCA/ICJEZXZpY2UgJiBwZXJmb3JtYW5jZSIgOiAiRGlzcG9z
+          aXRpdm8gZSBkZXNlbXBlbmhvIikKICAgICAgICAgICAgICAgICAgICAuZm9udCguc3lzdGVtKHNp
+          emU6IDEzLCB3ZWlnaHQ6IC5zZW1pYm9sZCkpLmZvcmVncm91bmRTdHlsZShzZWNvbmRhcnlUZXh0
+          KQogICAgICAgICAgICAgICAgcHJvZmlsZVJvdyhpY29uOiAic3BlZWRvbWV0ZXIiLCB0aXRsZTog
+          IkZQUyIsIHZhbHVlOiAiXChmcHNNb25pdG9yLmZwcykgRlBTIiwgZGV0YWlsOiBsYW5ndWFnZUVu
+          Z2xpc2ggPyAiUmVhbC10aW1lIGRpc3BsYXkgcmVmcmVzaCIgOiAiQXR1YWxpemHDp8OjbyBlbSB0
+          ZW1wbyByZWFsIikKICAgICAgICAgICAgICAgIHByb2ZpbGVSb3coaWNvbjogImNsb2NrLmZpbGwi
+          LCB0aXRsZTogbGFuZ3VhZ2VFbmdsaXNoID8gIkJyYXPDrWxpYSB0aW1lIiA6ICJIb3LDoXJpbyBk
+          ZSBCcmFzw61saWEiLCB2YWx1ZTogYnJhc2lsaWFUaW1lLCBkZXRhaWw6ICJBbWVyaWNhL1Nhb19Q
+          YXVsbyIpCiAgICAgICAgICAgICAgICBsaWNlbnNlVGltZVJvdwogICAgICAgICAgICAgICAgaWYg
+          bGV0IHVwZGF0ZSA9IHVwZGF0ZUFubm91bmNlbWVudCwgbGV0IHJhd1VSTCA9IHVwZGF0ZS51cmws
+          IGxldCB1cmwgPSBVUkwoc3RyaW5nOiByYXdVUkwpIHsKICAgICAgICAgICAgICAgICAgICBMaW5r
+          KGRlc3RpbmF0aW9uOiB1cmwpIHsKICAgICAgICAgICAgICAgICAgICAgICAgcHJvZmlsZVJvdyhp
+          Y29uOiAiYXJyb3cuZG93bi5jaXJjbGUuZmlsbCIsIHRpdGxlOiBsYW5ndWFnZUVuZ2xpc2ggPyAi
+          VXBkYXRlIGF2YWlsYWJsZSIgOiAiQXR1YWxpemHDp8OjbyBkaXNwb27DrXZlbCIsIHZhbHVlOiBs
+          YW5ndWFnZUVuZ2xpc2ggPyAiT3BlbiB1cGRhdGUgbGluayIgOiAiQWJyaXIgbGluayBkZSBhdHVh
+          bGl6YcOnw6NvIiwgZGV0YWlsOiB1cGRhdGUuYW5ub3VuY2VtZW50Py5pc0VtcHR5ID09IGZhbHNl
+          ID8gdXBkYXRlLmFubm91bmNlbWVudCEgOiByYXdVUkwpCiAgICAgICAgICAgICAgICAgICAgfQog
+          ICAgICAgICAgICAgICAgfQogICAgICAgICAgICAgICAgcHJvZmlsZVJvdyhpY29uOiAiaXBob25l
+          IiwgdGl0bGU6IGxhbmd1YWdlRW5nbGlzaCA/ICJEZXZpY2UiIDogIkRpc3Bvc2l0aXZvIiwgdmFs
+          dWU6ICJcKFVJRGV2aWNlLmN1cnJlbnQubW9kZWwpIMK3IFwoVUlEZXZpY2UuY3VycmVudC5uYW1l
+          KSIsIGRldGFpbDogImlPUyBcKFVJRGV2aWNlLmN1cnJlbnQuc3lzdGVtVmVyc2lvbikiKQogICAg
+          ICAgICAgICAgICAgcHJvZmlsZVJvdyhpY29uOiAicGFpbnRwYWxldHRlLmZpbGwiLCB0aXRsZTog
+          bGFuZ3VhZ2VFbmdsaXNoID8gIk1lbnUgdGhlbWUiIDogIlRlbWEgZG8gbWVudSIsIHZhbHVlOiB0
+          aGVtZS5yYXdWYWx1ZS5jYXBpdGFsaXplZCwgZGV0YWlsOiBsYW5ndWFnZUVuZ2xpc2ggPyAiQWNj
+          ZW50IGFuZCBzZWxlY3RlZCBlbGVtZW50cyIgOiAiQ29yIGRvcyBlbGVtZW50b3Mgc2VsZWNpb25h
+          ZG9zIikKICAgICAgICAgICAgICAgIHByb2ZpbGVSb3coaWNvbjogImNoYXJhY3Rlci5ib29rLmNs
+          b3NlZC5maWxsIiwgdGl0bGU6IGxhbmd1YWdlRW5nbGlzaCA/ICJMYW5ndWFnZSIgOiAiSWRpb21h
+          IiwgdmFsdWU6IGxhbmd1YWdlRW5nbGlzaCA/ICJFbmdsaXNoIiA6ICJQb3J0dWd1w6pzIiwgZGV0
+          YWlsOiBsYW5ndWFnZUVuZ2xpc2ggPyAiVGFwIEVOL1BUIHRvIHN3aXRjaCIgOiAiVG9xdWUgZW0g
+          RU4vUFQgcGFyYSB0cm9jYXIiKQogICAgICAgICAgICB9CiAgICAgICAgfQogICAgfQoKICAgIHBy
+          aXZhdGUgdmFyIGxpY2Vuc2VUaW1lUm93OiBzb21lIFZpZXcgewogICAgICAgIFRpbWVsaW5lVmll
+          dygucGVyaW9kaWMoZnJvbTogLm5vdywgYnk6IDEpKSB7IGNvbnRleHQgaW4KICAgICAgICAgICAg
+          cHJvZmlsZVJvdyhpY29uOiAiaG91cmdsYXNzLmJvdHRvbWhhbGYuZmlsbGVkIiwgdGl0bGU6IGxh
+          bmd1YWdlRW5nbGlzaCA/ICJLZXkgdmFsaWRpdHkiIDogIlZhbGlkYWRlIGRhIGtleSIsIHZhbHVl
+          OiByZW1haW5pbmdMaWNlbnNlVGV4dChhdDogY29udGV4dC5kYXRlKSwgZGV0YWlsOiBsYW5ndWFn
+          ZUVuZ2xpc2ggPyAiVXBkYXRlcyBpbiByZWFsIHRpbWUiIDogIkF0dWFsaXphw6fDo28gZW0gdGVt
+          cG8gcmVhbCIpCiAgICAgICAgfQogICAgfQogICAgcHJpdmF0ZSBmdW5jIHJlbWFpbmluZ0xpY2Vu
+          c2VUZXh0KGF0IG5vdzogRGF0ZSkgLT4gU3RyaW5nIHsKICAgICAgICBndWFyZCBsZXQgZXhwaXJl
+          c0F0ID0gbGljZW5zZUV4cGlyZXNBdCBlbHNlIHsgcmV0dXJuIGxhbmd1YWdlRW5nbGlzaCA/ICJX
+          YWl0aW5nIGZvciBhY3RpdmF0aW9uIiA6ICJBZ3VhcmRhbmRvIGF0aXZhw6fDo28iIH0KICAgICAg
+          ICBsZXQgc2Vjb25kcyA9IG1heCgwLCBJbnQoZXhwaXJlc0F0LnRpbWVJbnRlcnZhbFNpbmNlKG5v
+          dykpKQogICAgICAgIGlmIHNlY29uZHMgPT0gMCB7IHJldHVybiBsYW5ndWFnZUVuZ2xpc2ggPyAi
+          RXhwaXJlZCIgOiAiRXhwaXJhZGEiIH0KICAgICAgICBsZXQgZGF5cyA9IHNlY29uZHMgLyA4Nl80
+          MDAKICAgICAgICBsZXQgaG91cnMgPSAoc2Vjb25kcyAlIDg2XzQwMCkgLyAzXzYwMAogICAgICAg
+          IGxldCBtaW51dGVzID0gKHNlY29uZHMgJSAzXzYwMCkgLyA2MAogICAgICAgIGxldCBzZWNzID0g
+          c2Vjb25kcyAlIDYwCiAgICAgICAgaWYgZGF5cyA+IDAgeyByZXR1cm4gbGFuZ3VhZ2VFbmdsaXNo
+          ID8gIlwoZGF5cylkIFwoaG91cnMpaCBcKG1pbnV0ZXMpbSBcKHNlY3MpcyIgOiAiXChkYXlzKWQg
+          XChob3VycyloIFwobWludXRlcyltaW4gXChzZWNzKXMiIH0KICAgICAgICBpZiBob3VycyA+IDAg
+          eyByZXR1cm4gbGFuZ3VhZ2VFbmdsaXNoID8gIlwoaG91cnMpaCBcKG1pbnV0ZXMpbSBcKHNlY3Mp
+          cyIgOiAiXChob3VycyloIFwobWludXRlcyltaW4gXChzZWNzKXMiIH0KICAgICAgICByZXR1cm4g
+          IlwobWludXRlcyltaW4gXChzZWNzKXMiCiAgICB9CiAgICBwcml2YXRlIHN0YXRpYyBmdW5jIHBh
+          cnNlSVNPRGF0ZShfIHJhdzogU3RyaW5nKSAtPiBEYXRlPyB7CiAgICAgICAgbGV0IHBhcnNlciA9
+          IElTTzg2MDFEYXRlRm9ybWF0dGVyKCkKICAgICAgICBwYXJzZXIuZm9ybWF0T3B0aW9ucyA9IFsu
+          d2l0aEludGVybmV0RGF0ZVRpbWUsIC53aXRoRnJhY3Rpb25hbFNlY29uZHNdCiAgICAgICAgcmV0
+          dXJuIHBhcnNlci5kYXRlKGZyb206IHJhdykgPz8gSVNPODYwMURhdGVGb3JtYXR0ZXIoKS5kYXRl
+          KGZyb206IHJhdykKICAgIH0KCiAgICBwcml2YXRlIGZ1bmMgcmVmcmVzaFByb2ZpbGUoKSBhc3lu
+          YyB7CiAgICAgICAgZ3VhcmQgbGV0IGtleSA9IExpY2Vuc2VTdG9yZS5zdG9yZWRLZXksICFrZXku
+          aXNFbXB0eSBlbHNlIHsgcmV0dXJuIH0KICAgICAgICBkbyB7CiAgICAgICAgICAgIGxldCByZXNw
+          b25zZSA9IHRyeSBhd2FpdCBMaWNlbnNlQVBJLnZhbGlkYXRlKGtleToga2V5KQogICAgICAgICAg
+          ICBpZiByZXNwb25zZS52YWxpZCwgbGV0IHJhdyA9IHJlc3BvbnNlLmV4cGlyZXNBdCwgbGV0IGRh
+          dGUgPSBTZWxmLnBhcnNlSVNPRGF0ZShyYXcpIHsKICAgICAgICAgICAgICAgIGF3YWl0IE1haW5B
+          Y3Rvci5ydW4geyBsaWNlbnNlRXhwaXJlc0F0ID0gZGF0ZSB9CiAgICAgICAgICAgIH0gZWxzZSBp
+          ZiAhcmVzcG9uc2UudmFsaWQgewogICAgICAgICAgICAgICAgLy8gQ2xlYXIgc3RhbGUgY2FjaGVk
+          IHRpbWUgb25seSB3aGVuIHRoZSBzZXJ2ZXIgZXhwbGljaXRseSByZWplY3RzIHRoZSBrZXkuCiAg
+          ICAgICAgICAgICAgICBhd2FpdCBNYWluQWN0b3IucnVuIHsgbGljZW5zZUV4cGlyZXNBdCA9IG5p
+          bCB9CiAgICAgICAgICAgIH0KICAgICAgICB9IGNhdGNoIHsKICAgICAgICAgICAgLy8gS2VlcCB0
+          aGUgbGFzdCB2YWxpZCBsb2NhbGx5IGNhY2hlZCBleHBpcnkgZHVyaW5nIGEgdHJhbnNpZW50IG5l
+          dHdvcmsvQVBJIGVycm9yLgogICAgICAgIH0KICAgICAgICBkbyB7CiAgICAgICAgICAgIGxldCB1
+          cmwgPSBVUkwoc3RyaW5nOiAiaHR0cHM6Ly9hcGktcHJvZHVjdGlvbi0xODJjLnVwLnJhaWx3YXku
+          YXBwL2FwaS9hbm5vdW5jZW1lbnQiKSEKICAgICAgICAgICAgdmFyIHJlcXVlc3QgPSBVUkxSZXF1
+          ZXN0KHVybDogdXJsLCBjYWNoZVBvbGljeTogLnJlbG9hZElnbm9yaW5nTG9jYWxDYWNoZURhdGEs
+          IHRpbWVvdXRJbnRlcnZhbDogMjApCiAgICAgICAgICAgIHJlcXVlc3QuaHR0cE1ldGhvZCA9ICJQ
+          T1NUIgogICAgICAgICAgICByZXF1ZXN0LnNldFZhbHVlKCJhcHBsaWNhdGlvbi9qc29uIiwgZm9y
+          SFRUUEhlYWRlckZpZWxkOiAiQ29udGVudC1UeXBlIikKICAgICAgICAgICAgcmVxdWVzdC5odHRw
+          Qm9keSA9IHRyeSBKU09OU2VyaWFsaXphdGlvbi5kYXRhKHdpdGhKU09OT2JqZWN0OiBbImtleSI6
+          IGtleSwgImRldmljZV9pZCI6IFVJRGV2aWNlLmN1cnJlbnQuaWRlbnRpZmllckZvclZlbmRvcj8u
+          dXVpZFN0cmluZyA/PyAidW5rbm93bi1kZXZpY2UiLCAicGFja2FnZSI6IEJ1bmRsZS5tYWluLmJ1
+          bmRsZUlkZW50aWZpZXIgPz8gInVua25vd24uYnVuZGxlIiwgImFwcF92ZXJzaW9uIjogQnVuZGxl
+          Lm1haW4uaW5mb0RpY3Rpb25hcnk/WyJDRkJ1bmRsZVNob3J0VmVyc2lvblN0cmluZyJdIGFzPyBT
+          dHJpbmcgPz8gIjEuMCJdKQogICAgICAgICAgICBsZXQgKGRhdGEsIHJlc3BvbnNlKSA9IHRyeSBh
+          d2FpdCBVUkxTZXNzaW9uLnNoYXJlZC5kYXRhKGZvcjogcmVxdWVzdCkKICAgICAgICAgICAgZ3Vh
+          cmQgbGV0IGh0dHAgPSByZXNwb25zZSBhcz8gSFRUUFVSTFJlc3BvbnNlLCAoMjAwLi48MzAwKS5j
+          b250YWlucyhodHRwLnN0YXR1c0NvZGUpIGVsc2UgeyByZXR1cm4gfQogICAgICAgICAgICBsZXQg
+          YW5ub3VuY2VtZW50ID0gdHJ5IEpTT05EZWNvZGVyKCkuZGVjb2RlKEV4dGVybmFsVXBkYXRlQW5u
+          b3VuY2VtZW50LnNlbGYsIGZyb206IGRhdGEpCiAgICAgICAgICAgIGF3YWl0IE1haW5BY3Rvci5y
+          dW4geyB1cGRhdGVBbm5vdW5jZW1lbnQgPSBhbm5vdW5jZW1lbnQgfQogICAgICAgIH0gY2F0Y2gg
+          eyB9CiAgICB9CiAgICBwcml2YXRlIHZhciBicmFzaWxpYVRpbWU6IFN0cmluZyB7CiAgICAgICAg
+          bGV0IGZvcm1hdHRlciA9IERhdGVGb3JtYXR0ZXIoKQogICAgICAgIGZvcm1hdHRlci5sb2NhbGUg
+          PSBMb2NhbGUoaWRlbnRpZmllcjogbGFuZ3VhZ2VFbmdsaXNoID8gImVuX1VTIiA6ICJwdF9CUiIp
+          CiAgICAgICAgZm9ybWF0dGVyLnRpbWVab25lID0gVGltZVpvbmUoaWRlbnRpZmllcjogIkFtZXJp
+          Y2EvU2FvX1BhdWxvIikKICAgICAgICBmb3JtYXR0ZXIuZGF0ZUZvcm1hdCA9ICJISDptbTpzcyIK
+          ICAgICAgICByZXR1cm4gZm9ybWF0dGVyLnN0cmluZyhmcm9tOiBEYXRlKCkpCiAgICB9CgogICAg
+          cHJpdmF0ZSBmdW5jIHByb2ZpbGVSb3coaWNvbjogU3RyaW5nLCB0aXRsZTogU3RyaW5nLCB2YWx1
+          ZTogU3RyaW5nLCBkZXRhaWw6IFN0cmluZykgLT4gc29tZSBWaWV3IHsKICAgICAgICBIU3RhY2so
+          c3BhY2luZzogMTEpIHsKICAgICAgICAgICAgSW1hZ2Uoc3lzdGVtTmFtZTogaWNvbikuZm9udCgu
+          c3lzdGVtKHNpemU6IDE2LCB3ZWlnaHQ6IC5zZW1pYm9sZCkpLmZvcmVncm91bmRTdHlsZShhY2Nl
+          bnQpLmZyYW1lKHdpZHRoOiAzMCwgaGVpZ2h0OiAzMCkKICAgICAgICAgICAgICAgIC5iYWNrZ3Jv
+          dW5kKGFjY2VudC5vcGFjaXR5KDAuMTIpLCBpbjogUm91bmRlZFJlY3RhbmdsZShjb3JuZXJSYWRp
+          dXM6IDksIHN0eWxlOiAuY29udGludW91cykpCiAgICAgICAgICAgIFZTdGFjayhhbGlnbm1lbnQ6
+          IC5sZWFkaW5nLCBzcGFjaW5nOiAzKSB7CiAgICAgICAgICAgICAgICBUZXh0KHRpdGxlKS5mb250
+          KC5zeXN0ZW0oc2l6ZTogMTEsIHdlaWdodDogLnNlbWlib2xkKSkuZm9yZWdyb3VuZFN0eWxlKHNl
+          Y29uZGFyeVRleHQpCiAgICAgICAgICAgICAgICBUZXh0KHZhbHVlKS5mb250KC5zeXN0ZW0oc2l6
+          ZTogMTQsIHdlaWdodDogLmJvbGQsIGRlc2lnbjogLnJvdW5kZWQpKS5mb3JlZ3JvdW5kU3R5bGUo
+          cHJpbWFyeVRleHQpLmxpbmVMaW1pdCgxKQogICAgICAgICAgICAgICAgVGV4dChkZXRhaWwpLmZv
+          bnQoLnN5c3RlbShzaXplOiA5KSkuZm9yZWdyb3VuZFN0eWxlKHNlY29uZGFyeVRleHQpLmxpbmVM
+          aW1pdCgxKQogICAgICAgICAgICB9CiAgICAgICAgICAgIFNwYWNlcigpCiAgICAgICAgfQogICAg
+          ICAgIC5wYWRkaW5nKDEyKS5iYWNrZ3JvdW5kKGNhcmRCYWNrZ3JvdW5kLCBpbjogUm91bmRlZFJl
+          Y3RhbmdsZShjb3JuZXJSYWRpdXM6IDE1LCBzdHlsZTogLmNvbnRpbnVvdXMpKQogICAgICAgIC5v
+          dmVybGF5KFJvdW5kZWRSZWN0YW5nbGUoY29ybmVyUmFkaXVzOiAxNSwgc3R5bGU6IC5jb250aW51
+          b3VzKS5zdHJva2UoYWNjZW50Lm9wYWNpdHkoMC4yMiksIGxpbmVXaWR0aDogMSkpCiAgICB9Cgog
+          ICAgcHJpdmF0ZSBmdW5jIG9wdGlvbkNhcmQoXyBwYXRjaDogRXh0ZXJuYWxDYXRhbG9nUGF0Y2gp
+          IC0+IHNvbWUgVmlldyB7CiAgICAgICAgbGV0IGlzV29ya2luZyA9IHdvcmtpbmdJRHMuY29udGFp
+          bnMocGF0Y2guaWQpCiAgICAgICAgcmV0dXJuIEhTdGFjayhzcGFjaW5nOiAxMSkgewogICAgICAg
+          ICAgICBJbWFnZShzeXN0ZW1OYW1lOiBjYXRlZ29yeS5pY29uKS5mb250KC5zeXN0ZW0oc2l6ZTog
+          MTYsIHdlaWdodDogLnNlbWlib2xkKSkuZm9yZWdyb3VuZFN0eWxlKGFjY2VudCkuZnJhbWUod2lk
+          dGg6IDI4LCBoZWlnaHQ6IDI4KQogICAgICAgICAgICAgICAgLmJhY2tncm91bmQoYWNjZW50Lm9w
+          YWNpdHkoMC4xMiksIGluOiBSb3VuZGVkUmVjdGFuZ2xlKGNvcm5lclJhZGl1czogOSwgc3R5bGU6
+          IC5jb250aW51b3VzKSkKICAgICAgICAgICAgVlN0YWNrKGFsaWdubWVudDogLmxlYWRpbmcsIHNw
+          YWNpbmc6IDMpIHsKICAgICAgICAgICAgICAgIFRleHQocGF0Y2gudGl0bGUpLmZvbnQoLnN5c3Rl
+          bShzaXplOiAxMywgd2VpZ2h0OiAuc2VtaWJvbGQpKS5mb3JlZ3JvdW5kU3R5bGUocHJpbWFyeVRl
+          eHQpLmxpbmVMaW1pdCgxKQogICAgICAgICAgICAgICAgVGV4dChwYXRjaC5maWxlTmFtZSkuZm9u
+          dCguc3lzdGVtKHNpemU6IDEwLCBkZXNpZ246IC5tb25vc3BhY2VkKSkuZm9yZWdyb3VuZFN0eWxl
+          KHNlY29uZGFyeVRleHQpLmxpbmVMaW1pdCgxKQogICAgICAgICAgICB9CiAgICAgICAgICAgIFNw
+          YWNlcihtaW5MZW5ndGg6IDUpCiAgICAgICAgICAgIFRvZ2dsZSgiIiwgaXNPbjogQmluZGluZyhn
+          ZXQ6IHsKICAgICAgICAgICAgICAgIHBhdGNoZXMuZmlyc3Qod2hlcmU6IHsgJDAuaWQgPT0gcGF0
+          Y2guaWQgfSk/LmVuYWJsZWQgPz8gZmFsc2UKICAgICAgICAgICAgfSwgc2V0OiB7IGVuYWJsZWQg
+          aW4KICAgICAgICAgICAgICAgIGd1YXJkICFpc1dvcmtpbmcgZWxzZSB7IHJldHVybiB9CiAgICAg
+          ICAgICAgICAgICBpZiBlbmFibGVkIHsgYXBwbHlFeHRlcm5hbChwYXRjaCkgfSBlbHNlIHsgcmVz
+          dG9yZUV4dGVybmFsKHBhdGNoKSB9CiAgICAgICAgICAgIH0pKS5sYWJlbHNIaWRkZW4oKS50aW50
+          KGFjY2VudCkuc2NhbGVFZmZlY3QoMC44NikKICAgICAgICB9CiAgICAgICAgLnBhZGRpbmcoLmhv
+          cml6b250YWwsIDEyKS5mcmFtZShtaW5IZWlnaHQ6IDU2KQogICAgICAgIC5iYWNrZ3JvdW5kKGNh
+          cmRCYWNrZ3JvdW5kLCBpbjogUm91bmRlZFJlY3RhbmdsZShjb3JuZXJSYWRpdXM6IDE1LCBzdHls
+          ZTogLmNvbnRpbnVvdXMpKQogICAgICAgIC5vdmVybGF5KFJvdW5kZWRSZWN0YW5nbGUoY29ybmVy
+          UmFkaXVzOiAxNSwgc3R5bGU6IC5jb250aW51b3VzKS5zdHJva2UoYWNjZW50Lm9wYWNpdHkoMC4y
+          MiksIGxpbmVXaWR0aDogMSkpCiAgICAgICAgLm9wYWNpdHkoaXNXb3JraW5nID8gMC42MiA6IDEp
+          CiAgICAgICAgLm9uQXBwZWFyIHsgc3luY2hyb25pemVFeHRlcm5hbFN0YXRlKHBhdGNoKSB9CiAg
+          ICAgICAgLmFsZXJ0KCJFeHRlcm5hbCIsIGlzUHJlc2VudGVkOiBCaW5kaW5nKGdldDogeyBhY3Rp
+          b25FcnJvciAhPSBuaWwgfSwgc2V0OiB7IGlmICEkMCB7IGFjdGlvbkVycm9yID0gbmlsIH0gfSkp
+          IHsKICAgICAgICAgICAgQnV0dG9uKCJPSyIsIHJvbGU6IC5jYW5jZWwpIHsgYWN0aW9uRXJyb3Ig
+          PSBuaWwgfQogICAgICAgIH0gbWVzc2FnZTogeyBUZXh0KGFjdGlvbkVycm9yID8/ICJGYWxoYSBh
+          byBhcGxpY2FyIG8gYXJxdWl2by4iKSB9CiAgICB9CgogICAgcHJpdmF0ZSBmdW5jIGFwcGx5RXh0
+          ZXJuYWwoXyBwYXRjaDogRXh0ZXJuYWxDYXRhbG9nUGF0Y2gpIHsKICAgICAgICB3b3JraW5nSURz
+          Lmluc2VydChwYXRjaC5pZCkKICAgICAgICBsZXQgdG9rZW4gPSBVVUlEKCkKICAgICAgICBhY3Rp
+          dmF0aW9uVG9rZW5zW3BhdGNoLmlkXSA9IHRva2VuCiAgICAgICAgVGFzayB7CiAgICAgICAgICAg
+          IGRvIHsKICAgICAgICAgICAgICAgIGd1YXJkIGxldCByZW1vdGUgPSBwYXRjaC5kb3dubG9hZFVy
+          bCwgbGV0IHVybCA9IFVSTChzdHJpbmc6IHJlbW90ZSkgZWxzZSB7CiAgICAgICAgICAgICAgICAg
+          ICAgdGhyb3cgTlNFcnJvcihkb21haW46ICJFeHRlcm5hbFBhdGNoIiwgY29kZTogNDA0LCB1c2Vy
+          SW5mbzogW05TTG9jYWxpemVkRGVzY3JpcHRpb25LZXk6ICJBcnF1aXZvIG7Do28gZW5jb250cmFk
+          byBuYSBBUEkiXSkKICAgICAgICAgICAgICAgIH0KICAgICAgICAgICAgICAgIGxldCAoZGF0YSwg
+          cmVzcG9uc2UpID0gdHJ5IGF3YWl0IFVSTFNlc3Npb24uc2hhcmVkLmRhdGEoZnJvbTogdXJsKQog
+          ICAgICAgICAgICAgICAgZ3VhcmQgbGV0IGh0dHAgPSByZXNwb25zZSBhcz8gSFRUUFVSTFJlc3Bv
+          bnNlLCAoMjAwLi48MzAwKS5jb250YWlucyhodHRwLnN0YXR1c0NvZGUpIGVsc2UgewogICAgICAg
+          ICAgICAgICAgICAgIHRocm93IE5TRXJyb3IoZG9tYWluOiAiRXh0ZXJuYWxQYXRjaCIsIGNvZGU6
+          IDUwMiwgdXNlckluZm86IFtOU0xvY2FsaXplZERlc2NyaXB0aW9uS2V5OiAiRmFsaGEgYW8gYmFp
+          eGFyIG8gYXJxdWl2byBwdWJsaWNhZG8iXSkKICAgICAgICAgICAgICAgIH0KICAgICAgICAgICAg
+          ICAgIGxldCBkaXIgPSBGaWxlTWFuYWdlci5kZWZhdWx0LnVybHMoZm9yOiAuYXBwbGljYXRpb25T
+          dXBwb3J0RGlyZWN0b3J5LCBpbjogLnVzZXJEb21haW5NYXNrKVswXS5hcHBlbmRpbmdQYXRoQ29t
+          cG9uZW50KCJSZW1vdGVQYXRjaGVzIiwgaXNEaXJlY3Rvcnk6IHRydWUpCiAgICAgICAgICAgICAg
+          ICB0cnkgRmlsZU1hbmFnZXIuZGVmYXVsdC5jcmVhdGVEaXJlY3RvcnkoYXQ6IGRpciwgd2l0aElu
+          dGVybWVkaWF0ZURpcmVjdG9yaWVzOiB0cnVlKQogICAgICAgICAgICAgICAgbGV0IGxvY2FsID0g
+          ZGlyLmFwcGVuZGluZ1BhdGhDb21wb25lbnQocGF0Y2guZmlsZU5hbWUpCiAgICAgICAgICAgICAg
+          ICB0cnkgZGF0YS53cml0ZSh0bzogbG9jYWwsIG9wdGlvbnM6IC5hdG9taWMpCiAgICAgICAgICAg
+          ICAgICBsZXQgcGFja2FnZSA9IHRyeSBQYXRjaFByb2plY3RMaWJyYXJ5LnJlYWRQYWNrYWdlKGF0
+          OiBsb2NhbCkKICAgICAgICAgICAgICAgIGxldCBkZWNvZGVkID0gdHJ5IFBhdGNoUGFja2FnZUNv
+          ZGVjLmRlY29kZShwYWNrYWdlLCBwYXNzd29yZDogbmlsKQogICAgICAgICAgICAgICAgbGV0IHJl
+          Y2VpcHQgPSB0cnkgRGV2aWNlUGF0Y2hTZXJ2aWNlLmFwcGx5KHByb2plY3Q6IGRlY29kZWQucHJv
+          amVjdCkKICAgICAgICAgICAgICAgIGF3YWl0IE1haW5BY3Rvci5ydW4gewogICAgICAgICAgICAg
+          ICAgICAgIGlmIGxldCBpbmRleCA9IHBhdGNoZXMuZmlyc3RJbmRleCh3aGVyZTogeyAkMC5pZCA9
+          PSBwYXRjaC5pZCB9KSB7IHBhdGNoZXNbaW5kZXhdLmVuYWJsZWQgPSB0cnVlIH0KICAgICAgICAg
+          ICAgICAgICAgICByZWNlaXB0c1twYXRjaC5pZF0gPSByZWNlaXB0CiAgICAgICAgICAgICAgICAg
+          ICAgd29ya2luZ0lEcy5yZW1vdmUocGF0Y2guaWQpCiAgICAgICAgICAgICAgICB9CiAgICAgICAg
+          ICAgICAgICB0cnk/IGF3YWl0IFRhc2suc2xlZXAobmFub3NlY29uZHM6IDVfMDAwXzAwMF8wMDAp
+          CiAgICAgICAgICAgICAgICBhd2FpdCBNYWluQWN0b3IucnVuIHsKICAgICAgICAgICAgICAgICAg
+          ICBndWFyZCBhY3RpdmF0aW9uVG9rZW5zW3BhdGNoLmlkXSA9PSB0b2tlbiwgcGF0Y2hlcy5maXJz
+          dCh3aGVyZTogeyAkMC5pZCA9PSBwYXRjaC5pZCB9KT8uZW5hYmxlZCA9PSB0cnVlIGVsc2UgeyBy
+          ZXR1cm4gfQogICAgICAgICAgICAgICAgICAgIHJlc3RvcmVFeHRlcm5hbChwYXRjaCkKICAgICAg
+          ICAgICAgICAgIH0KICAgICAgICAgICAgfSBjYXRjaCB7CiAgICAgICAgICAgICAgICBhd2FpdCBN
+          YWluQWN0b3IucnVuIHsKICAgICAgICAgICAgICAgICAgICB3b3JraW5nSURzLnJlbW92ZShwYXRj
+          aC5pZCkKICAgICAgICAgICAgICAgICAgICBpZiBsZXQgaW5kZXggPSBwYXRjaGVzLmZpcnN0SW5k
+          ZXgod2hlcmU6IHsgJDAuaWQgPT0gcGF0Y2guaWQgfSkgeyBwYXRjaGVzW2luZGV4XS5lbmFibGVk
+          ID0gZmFsc2UgfQogICAgICAgICAgICAgICAgICAgIGFjdGlvbkVycm9yID0gZXJyb3IubG9jYWxp
+          emVkRGVzY3JpcHRpb24KICAgICAgICAgICAgICAgIH0KICAgICAgICAgICAgfQogICAgICAgIH0K
+          ICAgIH0KCiAgICBwcml2YXRlIGZ1bmMgcmVzdG9yZUV4dGVybmFsKF8gcGF0Y2g6IEV4dGVybmFs
+          Q2F0YWxvZ1BhdGNoKSB7CiAgICAgICAgYWN0aXZhdGlvblRva2Vuc1twYXRjaC5pZF0gPSBVVUlE
+          KCkKICAgICAgICBndWFyZCBsZXQgcmVjZWlwdCA9IHJlY2VpcHRzW3BhdGNoLmlkXSA/PyBmaW5k
+          RXh0ZXJuYWxSZWNlaXB0KHBhdGNoKSBlbHNlIHsKICAgICAgICAgICAgaWYgbGV0IGluZGV4ID0g
+          cGF0Y2hlcy5maXJzdEluZGV4KHdoZXJlOiB7ICQwLmlkID09IHBhdGNoLmlkIH0pIHsgcGF0Y2hl
+          c1tpbmRleF0uZW5hYmxlZCA9IGZhbHNlIH0KICAgICAgICAgICAgcmV0dXJuCiAgICAgICAgfQog
+          ICAgICAgIHdvcmtpbmdJRHMuaW5zZXJ0KHBhdGNoLmlkKQogICAgICAgIFRhc2suZGV0YWNoZWQo
+          cHJpb3JpdHk6IC51c2VySW5pdGlhdGVkKSB7CiAgICAgICAgICAgIGRvIHsKICAgICAgICAgICAg
+          ICAgIHRyeSBEZXZpY2VQYXRjaFNlcnZpY2UucmVzdG9yZShyZWNlaXB0OiByZWNlaXB0KQogICAg
+          ICAgICAgICAgICAgYXdhaXQgTWFpbkFjdG9yLnJ1biB7CiAgICAgICAgICAgICAgICAgICAgaWYg
+          bGV0IGluZGV4ID0gcGF0Y2hlcy5maXJzdEluZGV4KHdoZXJlOiB7ICQwLmlkID09IHBhdGNoLmlk
+          IH0pIHsgcGF0Y2hlc1tpbmRleF0uZW5hYmxlZCA9IGZhbHNlIH0KICAgICAgICAgICAgICAgICAg
+          ICByZWNlaXB0cy5yZW1vdmVWYWx1ZShmb3JLZXk6IHBhdGNoLmlkKQogICAgICAgICAgICAgICAg
+          ICAgIHdvcmtpbmdJRHMucmVtb3ZlKHBhdGNoLmlkKQogICAgICAgICAgICAgICAgfQogICAgICAg
+          ICAgICB9IGNhdGNoIHsKICAgICAgICAgICAgICAgIGF3YWl0IE1haW5BY3Rvci5ydW4geyB3b3Jr
+          aW5nSURzLnJlbW92ZShwYXRjaC5pZCk7IGFjdGlvbkVycm9yID0gZXJyb3IubG9jYWxpemVkRGVz
+          Y3JpcHRpb24gfQogICAgICAgICAgICB9CiAgICAgICAgfQogICAgfQoKICAgIHByaXZhdGUgZnVu
+          YyBzeW5jaHJvbml6ZUV4dGVybmFsU3RhdGUoXyBwYXRjaDogRXh0ZXJuYWxDYXRhbG9nUGF0Y2gp
+          IHsKICAgICAgICBndWFyZCBsZXQgcmVjZWlwdCA9IGZpbmRFeHRlcm5hbFJlY2VpcHQocGF0Y2gp
+          IGVsc2UgeyByZXR1cm4gfQogICAgICAgIHJlY2VpcHRzW3BhdGNoLmlkXSA9IHJlY2VpcHQKICAg
+          ICAgICBpZiBsZXQgaW5kZXggPSBwYXRjaGVzLmZpcnN0SW5kZXgod2hlcmU6IHsgJDAuaWQgPT0g
+          cGF0Y2guaWQgfSkgeyBwYXRjaGVzW2luZGV4XS5lbmFibGVkID0gdHJ1ZSB9CiAgICB9CgogICAg
+          cHJpdmF0ZSBmdW5jIGZpbmRFeHRlcm5hbFJlY2VpcHQoXyBwYXRjaDogRXh0ZXJuYWxDYXRhbG9n
+          UGF0Y2gpIC0+IFBhdGNoVHJhbnNhY3Rpb25SZWNlaXB0PyB7CiAgICAgICAgbGV0IGRpciA9IEZp
+          bGVNYW5hZ2VyLmRlZmF1bHQudXJscyhmb3I6IC5hcHBsaWNhdGlvblN1cHBvcnREaXJlY3Rvcnks
+          IGluOiAudXNlckRvbWFpbk1hc2spWzBdLmFwcGVuZGluZ1BhdGhDb21wb25lbnQoIlJlbW90ZVBh
+          dGNoZXMiLCBpc0RpcmVjdG9yeTogdHJ1ZSkKICAgICAgICBsZXQgbG9jYWwgPSBkaXIuYXBwZW5k
+          aW5nUGF0aENvbXBvbmVudChwYXRjaC5maWxlTmFtZSkKICAgICAgICBndWFyZCBGaWxlTWFuYWdl
+          ci5kZWZhdWx0LmZpbGVFeGlzdHMoYXRQYXRoOiBsb2NhbC5wYXRoKSwgbGV0IGRhdGEgPSB0cnk/
+          IFBhdGNoUHJvamVjdExpYnJhcnkucmVhZFBhY2thZ2UoYXQ6IGxvY2FsKSwgbGV0IGRlY29kZWQg
+          PSB0cnk/IFBhdGNoUGFja2FnZUNvZGVjLmRlY29kZShkYXRhLCBwYXNzd29yZDogbmlsKSBlbHNl
+          IHsgcmV0dXJuIG5pbCB9CiAgICAgICAgcmV0dXJuIERldmljZVBhdGNoU2VydmljZS5sYXRlc3RS
+          ZWNlaXB0KHByb2plY3RJRDogZGVjb2RlZC5wcm9qZWN0LmlkKQogICAgfQoKICAgIHByaXZhdGUg
+          ZnVuYyBsb2FkQ2F0YWxvZygpIGFzeW5jIHsKICAgICAgICBndWFyZCBsZXQga2V5ID0gTGljZW5z
+          ZVN0b3JlLnN0b3JlZEtleSwgIWtleS5pc0VtcHR5IGVsc2UgeyByZXR1cm4gfQogICAgICAgIGF3
+          YWl0IE1haW5BY3Rvci5ydW4geyBsb2FkaW5nID0gdHJ1ZTsgbGFzdEVycm9yID0gbmlsIH0KICAg
+          ICAgICBkZWZlciB7IFRhc2sgeyBATWFpbkFjdG9yIGluIGxvYWRpbmcgPSBmYWxzZSB9IH0KICAg
+          ICAgICBkbyB7CiAgICAgICAgICAgIGxldCB1cmwgPSBVUkwoc3RyaW5nOiAiaHR0cHM6Ly9hcGkt
+          cHJvZHVjdGlvbi0xODJjLnVwLnJhaWx3YXkuYXBwL2FwaS9wYXRjaGVzL2V4dGVybmFsL2NhdGFs
+          b2ciKSEKICAgICAgICAgICAgdmFyIHJlcXVlc3QgPSBVUkxSZXF1ZXN0KHVybDogdXJsLCBjYWNo
+          ZVBvbGljeTogLnJlbG9hZElnbm9yaW5nTG9jYWxDYWNoZURhdGEsIHRpbWVvdXRJbnRlcnZhbDog
+          MjApCiAgICAgICAgICAgIHJlcXVlc3QuaHR0cE1ldGhvZCA9ICJQT1NUIgogICAgICAgICAgICBy
+          ZXF1ZXN0LnNldFZhbHVlKCJhcHBsaWNhdGlvbi9qc29uIiwgZm9ySFRUUEhlYWRlckZpZWxkOiAi
+          Q29udGVudC1UeXBlIikKICAgICAgICAgICAgcmVxdWVzdC5odHRwQm9keSA9IHRyeSBKU09OU2Vy
+          aWFsaXphdGlvbi5kYXRhKHdpdGhKU09OT2JqZWN0OiBbImtleSI6IGtleSwgImRldmljZV9pZCI6
+          IFVJRGV2aWNlLmN1cnJlbnQuaWRlbnRpZmllckZvclZlbmRvcj8udXVpZFN0cmluZyA/PyAidW5r
+          bm93bi1kZXZpY2UiLCAicGFja2FnZSI6IEJ1bmRsZS5tYWluLmJ1bmRsZUlkZW50aWZpZXIgPz8g
+          InVua25vd24uYnVuZGxlIiwgImFwcF92ZXJzaW9uIjogQnVuZGxlLm1haW4uaW5mb0RpY3Rpb25h
+          cnk/WyJDRkJ1bmRsZVNob3J0VmVyc2lvblN0cmluZyJdIGFzPyBTdHJpbmcgPz8gIjEuMCJdKQog
+          ICAgICAgICAgICBsZXQgKGRhdGEsIHJlc3BvbnNlKSA9IHRyeSBhd2FpdCBVUkxTZXNzaW9uLnNo
+          YXJlZC5kYXRhKGZvcjogcmVxdWVzdCkKICAgICAgICAgICAgbGV0IGRlY29kZWQgPSB0cnk/IEpT
+          T05EZWNvZGVyKCkuZGVjb2RlKEV4dGVybmFsQ2F0YWxvZ1Jlc3BvbnNlLnNlbGYsIGZyb206IGRh
+          dGEpCiAgICAgICAgICAgIGd1YXJkIGxldCBodHRwID0gcmVzcG9uc2UgYXM/IEhUVFBVUkxSZXNw
+          b25zZSBlbHNlIHsgdGhyb3cgVVJMRXJyb3IoLmJhZFNlcnZlclJlc3BvbnNlKSB9CiAgICAgICAg
+          ICAgIGd1YXJkICgyMDAuLjwzMDApLmNvbnRhaW5zKGh0dHAuc3RhdHVzQ29kZSkgZWxzZSB7CiAg
+          ICAgICAgICAgICAgICBsZXQgbWVzc2FnZSA9IGRlY29kZWQ/Lm1lc3NhZ2U/LnRyaW1taW5nQ2hh
+          cmFjdGVycyhpbjogLndoaXRlc3BhY2VzQW5kTmV3bGluZXMpCiAgICAgICAgICAgICAgICB0aHJv
+          dyBOU0Vycm9yKGRvbWFpbjogIkV4dGVybmFsQ2F0YWxvZyIsIGNvZGU6IGh0dHAuc3RhdHVzQ29k
+          ZSwgdXNlckluZm86IFtOU0xvY2FsaXplZERlc2NyaXB0aW9uS2V5OiBtZXNzYWdlPy5pc0VtcHR5
+          ID09IGZhbHNlID8gbWVzc2FnZSEgOiAiSFRUUCBcKGh0dHAuc3RhdHVzQ29kZSkiXSkKICAgICAg
+          ICAgICAgfQogICAgICAgICAgICBndWFyZCBsZXQgZGVjb2RlZCBlbHNlIHsgdGhyb3cgTlNFcnJv
+          cihkb21haW46ICJFeHRlcm5hbENhdGFsb2ciLCBjb2RlOiAtMiwgdXNlckluZm86IFtOU0xvY2Fs
+          aXplZERlc2NyaXB0aW9uS2V5OiAiUmVzcG9zdGEgaW52w6FsaWRhIGRhIEFQSSJdKSB9CiAgICAg
+          ICAgICAgIGd1YXJkIGRlY29kZWQudmFsaWQgZWxzZSB7IHRocm93IE5TRXJyb3IoZG9tYWluOiAi
+          RXh0ZXJuYWxDYXRhbG9nIiwgY29kZTogLTMsIHVzZXJJbmZvOiBbTlNMb2NhbGl6ZWREZXNjcmlw
+          dGlvbktleTogZGVjb2RlZC5tZXNzYWdlID8/ICJMaWNlbsOnYSBuw6NvIGF1dG9yaXphZGEiXSkg
+          fQogICAgICAgICAgICBhd2FpdCBNYWluQWN0b3IucnVuIHsgcGF0Y2hlcyA9IGRlY29kZWQucGF0
+          Y2hlcyA/PyBbXSB9CiAgICAgICAgfSBjYXRjaCB7CiAgICAgICAgICAgIGF3YWl0IE1haW5BY3Rv
+          ci5ydW4geyBsYXN0RXJyb3IgPSBlcnJvci5sb2NhbGl6ZWREZXNjcmlwdGlvbiB9CiAgICAgICAg
+          fQogICAgfQp9Cg==
+          B64
+          base64 -D -i /tmp/external-panel.b64 -o /tmp/ExternalPanelView.swift
+          cat /tmp/ExternalPanelView.swift >> "$APP_DIR/views/PatchProjectsView.swift"
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("source/3105-1.1.1/ThreeOneOSFive/views/PatchProjectsView.swift")
+          text = p.read_text().replace("interfaceTab: nil, section: nil", "interfaceTab: item.interfaceTab, section: item.section")
+          p.write_text(text)
+          PY
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("source/3105-1.1.1/ThreeOneOSFive/views/PatchProjectsView.swift")
+          lines = p.read_text().splitlines(keepends=True)
+          removed = [line for line in lines if "Text(patch.fileName)" in line]
+          if removed:
+              p.write_text("".join(line for line in lines if "Text(patch.fileName)" not in line))
+          else:
+              p.write_text("".join(lines))
+          PY
+
+      - name: Add license status to Início
+        shell: bash
+        run: |
+          set -euo pipefail
+          PATCH_SWIFT=source/3105-1.1.1/ThreeOneOSFive/views/PatchProjectsView.swift
+          python3 - "$PATCH_SWIFT" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+          p = Path(sys.argv[1])
+          t = p.read_text()
+          t, state_count = re.subn(r'(?m)^(\s*)@State private var logoURLs: \[String: String\] = \[:\]$', r'\1@State private var logoURLs: [String: String] = [:]\n\1@State private var licenseRemainingUses: Int?\n\1@State private var licenseExpiresAt: String?', t, count=1)
+          if state_count != 1:
+              raise SystemExit('license state insertion anchor not found')
+          t = t.replace('                              header\n                              sectionTitle("SELECIONE O JOGO", top: 30)', '                              header\n                              licenseStatusCard\n                              sectionTitle("SELECIONE O JOGO", top: 30)', 1)
+          t = t.replace('                      logoURLs = await logos\n                  }', '                      logoURLs = await logos\n                      await refreshLicenseStatus()\n                  }', 1)
+          anchor = '              private var fg: Color { darkMode ? .white : .black }'
+          card = '''              private var licenseStatusCard: some View {
+                  HStack(spacing: 12) {
+                      Image(systemName: "key.fill")
+                          .font(.system(size: 22, weight: .semibold))
+                          .foregroundStyle(.orange)
+                          .frame(width: 42, height: 42)
+                          .background(Color.orange.opacity(0.14), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                      VStack(alignment: .leading, spacing: 4) {
+                          Text("STATUS DA LICENÇA")
+                              .font(.system(size: 11, weight: .bold))
+                              .foregroundStyle(muted)
+                          HStack(spacing: 12) {
+                              Text(licenseRemainingUses.map { "\\($0) keys restantes" } ?? "Consultando keys...")
+                                  .font(.system(size: 14, weight: .bold))
+                                  .foregroundStyle(fg)
+                              if let licenseExpiresAt {
+                                  Text("Expira: \\(licenseExpiresAt)")
+                                      .font(.system(size: 11, weight: .medium))
+                                      .foregroundStyle(muted)
+                                      .lineLimit(1)
+                              }
+                          }
+                          Text("Compatível com iOS 17, 18, 26 e 27")
+                              .font(.system(size: 11, weight: .medium))
+                              .foregroundStyle(muted)
+                      }
+                      Spacer(minLength: 0)
+                  }
+                  .padding(12)
+                  .background(panel, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                  .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(fg.opacity(0.12), lineWidth: 1))
+                  .padding(.top, 14)
+              }
+
+              private func refreshLicenseStatus() async {
+                  guard let key = LicenseStore.storedKey else { return }
+                  guard let response = try? await LicenseAPI.validate(key: key), response.valid else { return }
+                  await MainActor.run {
+                      licenseRemainingUses = response.remainingUses
+                      licenseExpiresAt = response.expiresAt.map { String($0.prefix(10)) }
+                  }
+              }
+
+          '''
+          if anchor not in t:
+              anchor = 'private var fg: Color { darkMode ? .white : .black }'
+          if anchor not in t:
+              raise SystemExit('home status insertion anchor not found')
+          t = t.replace(anchor, card + anchor, 1)
+          p.write_text(t)
+          PY
+      - name: Keep only PROXY and External tabs
+        shell: bash
+        run: |
+          set -euo pipefail
+          NAV_SWIFT=source/3105-1.1.1/ThreeOneOSFive/helpers/AppTabNavigationState.swift
+          CONTENT_SWIFT=source/3105-1.1.1/ThreeOneOSFive/ContentView.swift
+          PATCH_SWIFT=source/3105-1.1.1/ThreeOneOSFive/views/PatchProjectsView.swift
+          python3 - "$NAV_SWIFT" "$CONTENT_SWIFT" "$PATCH_SWIFT" <<'PY'
+          from pathlib import Path
+          import re, sys
+          nav, content, patch = map(Path, sys.argv[1:])
+          n = nav.read_text()
+          n = n.replace('return [.home, .patches, .external].filter(isVisible)', 'return [.patches, .external].filter(isVisible)', 1)
+          n = n.replace('selectedTab: Int = 0', 'selectedTab: Int = AppSection.patches.rawValue', 1)
+          n = n.replace('selectedTab = AppSection.home.rawValue', 'selectedTab = AppSection.patches.rawValue', 1)
+          nav.write_text(n)
+          c = content.read_text()
+          c = c.replace('initialTab = 0', 'initialTab = AppSection.patches.rawValue', 1)
+          content.write_text(c)
+          p = patch.read_text()
+          p = p.replace('                      bottomNav\n', '', 1)
+          patch.write_text(p)
+          PY
+      - name: Enforce disabled patches from Railway
+        shell: bash
+        run: |
+          set -euo pipefail
+          PATCH_SWIFT=source/3105-1.1.1/ThreeOneOSFive/views/PatchProjectsView.swift
+          python3 - "$PATCH_SWIFT" <<'PY'
+          from pathlib import Path
+          import sys
+          p = Path(sys.argv[1])
+          text = p.read_text()
+          old = 'guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), let catalog = try? JSONDecoder().decode(RemotePatchCatalogResponse.self, from: data), catalog.valid, let descriptor = catalog.patches?.first(where: { $0.fileName.precomposedStringWithCanonicalMapping == patch.fileName.precomposedStringWithCanonicalMapping }), let url = URL(string: descriptor.downloadUrl) else { return cachedFile(named: patch.fileName) }'
+          new = '''guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), let catalog = try? JSONDecoder().decode(RemotePatchCatalogResponse.self, from: data), catalog.valid else { return cachedFile(named: patch.fileName) }
+                      guard let descriptor = catalog.patches?.first(where: { $0.fileName.precomposedStringWithCanonicalMapping == patch.fileName.precomposedStringWithCanonicalMapping }), let url = URL(string: descriptor.downloadUrl) else {
+                          if let cached = cachedFile(named: patch.fileName) { try? FileManager.default.removeItem(at: cached) }
+                          return nil
+                      }'''
+          if old not in text:
+              raise SystemExit("remote catalog guard not found")
+          p.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Force visible Injector icon
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONTENT_SWIFT=source/3105-1.1.1/ThreeOneOSFive/ContentView.swift
+          python3 - "$CONTENT_SWIFT" "cHJpdmF0ZSBzdHJ1Y3QgQ29tcGFjdFRhYkxhYmVsOiBWaWV3IHsKICAgIGxldCB0aXRsZTogU3RyaW5nCiAgICBsZXQgc3lzdGVtSW1hZ2U6IFN0cmluZwoKICAgIHZhciBib2R5OiBzb21lIFZpZXcgewogICAgICAgIExhYmVsIHsKICAgICAgICAgICAgVGV4dCh0aXRsZSkKICAgICAgICB9IGljb246IHsKICAgICAgICAgICAgSW1hZ2Uoc3lzdGVtTmFtZTogdGl0bGUgPT0gIkluamVjdG9yIiA/ICJnYW1lY29udHJvbGxlci5maWxsIiA6IHN5c3RlbUltYWdlKQogICAgICAgICAgICAgICAgLmZvbnQoLnN5c3RlbShzaXplOiAxOCwgd2VpZ2h0OiAuc2VtaWJvbGQpKQogICAgICAgICAgICAgICAgLnN5bWJvbFJlbmRlcmluZ01vZGUoLm1vbm9jaHJvbWUpCiAgICAgICAgICAgICAgICAuZm9yZWdyb3VuZFN0eWxlKHRpdGxlID09ICJJbmplY3RvciIgPyBDb2xvci5ibHVlIDogQ29sb3IucHJpbWFyeSkKICAgICAgICAgICAgICAgIC5mcmFtZSh3aWR0aDogMjQsIGhlaWdodDogMjQpCiAgICAgICAgfQogICAgfQp9Cgo=" <<'PY'
+          import base64
+          import sys
+          from pathlib import Path
+          p=Path(sys.argv[1])
+          t=p.read_text()
+          definition=base64.b64decode(sys.argv[2]).decode()
+          if 'private struct InjectorTabIcon: View' not in t:
+              t=t.replace('private struct CompactTabLabel: View {', definition+'private struct CompactTabLabel: View {', 1)
+          t=t.replace('if let image = UIImage(', 'if title == "Injector" { InjectorTabIcon() } else if let image = UIImage(', 1)
+          p.write_text(t)
+          PY
+
+      - name: Preserve native Injector icon and neutral colors
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The native SF Symbol and final SwiftUI colors are applied in the finalization step.
+          :
+
+      - name: Keep per-screen backgrounds
+        shell: bash
+        run: |
+          set -euo pipefail
+          :
+
+      - name: Use native SwiftUI Injector icon
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONTENT_SWIFT=source/3105-1.1.1/ThreeOneOSFive/ContentView.swift
+          python3 - "$CONTENT_SWIFT" "cHJpdmF0ZSBzdHJ1Y3QgQ29tcGFjdFRhYkxhYmVsOiBWaWV3IHsKICAgIGxldCB0aXRsZTogU3RyaW5nCiAgICBsZXQgc3lzdGVtSW1hZ2U6IFN0cmluZwogICAgdmFyIGJvZHk6IHNvbWUgVmlldyB7CiAgICAgICAgTGFiZWwgewogICAgICAgICAgICBUZXh0KHRpdGxlKQogICAgICAgIH0gaWNvbjogewogICAgICAgICAgICBJbWFnZShzeXN0ZW1OYW1lOiB0aXRsZSA9PSAiSW5qZWN0b3IiID8gImdhbWVjb250cm9sbGVyLmZpbGwiIDogc3lzdGVtSW1hZ2UpCiAgICAgICAgICAgICAgICAuZm9udCguc3lzdGVtKHNpemU6IDE4LCB3ZWlnaHQ6IC5zZW1pYm9sZCkpCiAgICAgICAgICAgICAgICAuc3ltYm9sUmVuZGVyaW5nTW9kZSgubW9ub2Nocm9tZSkKICAgICAgICAgICAgICAgIC5mb3JlZ3JvdW5kU3R5bGUodGl0bGUgPT0gIkluamVjdG9yIiA/IENvbG9yLmJsdWUgOiBDb2xvci5wcmltYXJ5KQogICAgICAgICAgICAgICAgLmZyYW1lKHdpZHRoOiAyNCwgaGVpZ2h0OiAyNCkKICAgICAgICB9CiAgICB9Cn0=" <<'PY'
+          import base64, sys
+          from pathlib import Path
+          content = Path(sys.argv[1])
+          text = content.read_text()
+          definition = base64.b64decode(sys.argv[2]).decode()
+          start = text.find("private struct CompactTabLabel: View {")
+          end = text.find("private extension AppSection", start)
+          if start < 0 or end < 0: raise SystemExit("CompactTabLabel boundaries not found")
+          content.write_text(text[:start] + definition + "\n\n" + text[end:])
+          PY
+      - name: Finalize Injector reference layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_DIR=source/3105-1.1.1/ThreeOneOSFive
+          PATCH_TEMPLATE="$APP_DIR/views/PatchProjectsView.swift"
+          # Ensure the replacement reaches the actual case/path referenced by the Xcode project.
+          while IFS= read -r f; do
+            [ "$f" = "$PATCH_TEMPLATE" ] || cp "$PATCH_TEMPLATE" "$f"
+          done < <(find source -type f -iname 'PatchProjectsView.swift')
+          CONTENT_SWIFT="$APP_DIR/ContentView.swift"
+          python3 - "$CONTENT_SWIFT" <<'PY'
+          from pathlib import Path
+          import re, sys
+          p=Path(sys.argv[1]); t=p.read_text()
+          # Remove any legacy orange asset branch if present.
+          t=re.sub(r'if title == "Injector", let url = Bundle\.main\.url\(forResource: "injector_icon_orange".*?\n\s*\} else if let image = UIImage\(', 'if title == "Injector" { Image(systemName: "gamecontroller.fill").font(.system(size: 20, weight: .semibold)).foregroundStyle(Color.blue) } else if let image = UIImage(', t, count=1, flags=re.S)
+          t=t.replace('Color.orange', 'Color.blue')
+          t=t.replace('shippingbox.fill', 'gamecontroller.fill')
+          t=t.replace('syringe.fill', 'gamecontroller.fill')
+          # Keep the tab bar neutral/blue rather than orange.
+          t=t.replace('UIColor.orange', 'UIColor.systemBlue')
+          p.write_text(t)
+          PY
+
+      - name: Verify compact Free Fire route
+        shell: bash
+        run: |
+          set -euo pipefail
+          matches=$(find source -type f -iname 'PatchProjectsView.swift')
+          test -n "$matches"
+          for f in $matches; do
+            grep -q 'SELECIONE O JOGO' "$f"
+            ! grep -q 'FileDocumentPicker' "$f"
+            ! grep -q 'PatchPackagePickerPolicy' "$f"
+          done
+
+      - name: Integrar API Kyojinx funcional
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_DIR=source/3105-1.1.1/ThreeOneOSFive
+          PBX="$APP_DIR.xcodeproj/project.pbxproj"
+          echo "aW1wb3J0IFN3aWZ0VUkKaW1wb3J0IEZvdW5kYXRpb24KCkBNYWluQWN0b3IKZmluYWwgY2xhc3MgTGljZW5zZU1hbmFnZXI6IE9ic2VydmFibGVPYmplY3QgewogICAgZW51bSBTdGF0ZTogRXF1YXRhYmxlIHsKICAgICAgICBjYXNlIGxvYWRpbmcKICAgICAgICBjYXNlIG5lZWRzS2V5CiAgICAgICAgY2FzZSB2YWxpZGF0aW5nCiAgICAgICAgY2FzZSB2YWxpZGF0ZWQKICAgICAgICBjYXNlIGZhaWxlZChTdHJpbmcpCiAgICB9CiAgICBAUHVibGlzaGVkIHByaXZhdGUoc2V0KSB2YXIgc3RhdGU6IFN0YXRlID0gLnZhbGlkYXRlZAogICAgQFB1Ymxpc2hlZCB2YXIgYXBpS2V5ID0gIiIKICAgIHZhciBpc1ZhbGlkYXRlZDogQm9vbCB7IHRydWUgfQogICAgaW5pdCgpIHt9CiAgICBmdW5jIHN1Ym1pdEtleSgpIHsgc3RhdGUgPSAudmFsaWRhdGVkIH0KfQ==" | base64 --decode > "$APP_DIR/LicenseManager.swift"
+          python3 - "$APP_DIR/App.swift" <<'PY3'
+          from pathlib import Path
+          p = Path(__import__("sys").argv[1])
+          t = p.read_text()
+          if "import CryptoKit" not in t:
+              t = t.replace("import Foundation\n", "import Foundation\nimport CryptoKit\n", 1)
+          p.write_text(t)
+          PY3
+          cat >> "$APP_DIR/App.swift" <<'SWIFT'
+
+          private enum Branding { static let appName = "Nubank" }
+          private extension AppTheme { static var cardBackground: Color { Color(.secondarySystemBackground) } }
+          SWIFT
+          mkdir -p "$APP_DIR/SDK"
+          cp APIClient.h "$APP_DIR/SDK/APIClient.h"
+          BRIDGE="$APP_DIR/ThreeOneOSFive-Bridging-Header.h"
+          test -f "$BRIDGE"
+          grep -q 'SDK/APIClient.h' "$BRIDGE" || printf '\n#import "SDK/APIClient.h"\n' >> "$BRIDGE"
+          python3 - "$PBX" <<'PY'
+          from pathlib import Path
+          import sys
+          p = Path(sys.argv[1])
+          t = p.read_text()
+          if 'KYOJIN_LICENSE_FILE' not in t:
+              t = t.replace('/* Begin PBXSourcesBuildPhase section */', '/* Begin PBXSourcesBuildPhase section */', 1)
+              t = t.replace('/* Begin PBXFrameworksBuildPhase section */', '/* Begin PBXFrameworksBuildPhase section */', 1)
+              t = t.replace('OTHER_LDFLAGS = "-lz";', 'OTHER_LDFLAGS = ("-lz", "-ObjC", "-lc++");')
+              src = t.find('isa = PBXSourcesBuildPhase;')
+              if src >= 0:
+                  fs = t.find('files = (', src)
+                  if fs >= 0 and 'KYOJIN_LICENSE_BUILD' not in t[fs:t.find(');', fs)]:
+                      t = t[:fs] + t[fs:].replace('files = (', 'files = (\n\t\t\t\tKYOJIN_LICENSE_BUILD /* LicenseManager.swift in Sources */,', 1)
+              fw = t.find('isa = PBXFrameworksBuildPhase;')
+              if fw >= 0:
+                  ff = t.find('files = (', fw)
+              p.write_text(t)
+          PY
+          python3 - "$APP_DIR/App.swift" <<'PY'
+          from pathlib import Path
+          import sys
+          p = Path(sys.argv[1]); t = p.read_text()
+          nl = chr(10)
+          # API e tela de licença removidas; o app inicia diretamente.
+          p.write_text(t)
+          PY
+      - name: Add anti-tamper protection and exclusive client identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_DIR=source/3105-1.1.1/ThreeOneOSFive
+          python3 - "$APP_DIR/App.swift" <<'PY'
+          from pathlib import Path
+          import base64, sys
+          p = Path(sys.argv[1])
+          t = p.read_text()
+          if 'import MachO' not in t:
+              t = t.replace('import UIKit\n', 'import UIKit\nimport MachO\nimport Darwin\n', 1)
+          if 'AntiTamperGuard.start()' not in t:
+              t = t.replace('        setupLogCapture()\n', '        AntiTamperGuard.start()\n        setupLogCapture()\n', 1)
+          guard = "\n".join(line for line in base64.b64decode('aW1wb3J0IEZvdW5kYXRpb24KaW1wb3J0IFVJS2l0CmltcG9ydCBNYWNoTwppbXBvcnQgRGFyd2luCgpwcml2YXRlIGVudW0gQW50aVRhbXBlckd1YXJkIHsKICAgIHByaXZhdGUgc3RhdGljIHZhciB0aW1lcjogVGltZXI/CiAgICBwcml2YXRlIHN0YXRpYyB2YXIgcmVwb3J0ZWQgPSBmYWxzZQogICAgcHJpdmF0ZSBzdGF0aWMgbGV0IGluZGljYXRvcnM6IFNldDxVSW50NjQ+ID0gWwogICAgICAgIDE1MTgzMzc4OTAxNTg1NzYwMTU0LCAxNTM3MDcwMjQ4NzY4NTcxMjI4MywgODI3NTgwNTg2MzQ3OTcxNzYyMywKICAgICAgICA0NDA1ODE5OTUwNTE2ODMyNjQ2LCA2OTE4ODc5ODYyNTM3MDQzMzYxLCAxMzA2MzQ2NTUwMzUyODYyMzI2NSwKICAgICAgICAxMTk0NTkwNTgxMDMyMDg0MDY1NiwgMTM1MDQ2MTUxMjE4MjcxMjU2MCwgMTc3NjEyOTk3NzQzNTAwOTQ4NDksCiAgICAgICAgMjI5NTg1NzQwMDc4OTQ1NDgzNSwgNTAxOTg2ODUyMjQyNDQ5NjI3NgogICAgXQogICAgcHJpdmF0ZSBzdGF0aWMgbGV0IGNhbmFyaWVzOiBbW1VJbnQ4XV0gPSBbCiAgICAgICAgWzgwLCA3MiwgOTUsIDY2LCA4NSwgNzMsIDc2LCA2OCwgOTUsIDUwLCA0OCwgNTAsIDU0LCA5NSwgNjUsIDU1LCA0OSwgNjddLAogICAgICAgIFs4MCwgNzIsIDk1LCA4MiwgODUsIDc4LCA4NCwgNzMsIDc3LCA2OSwgOTUsIDczLCA2OCwgOTUsIDU3LCA1MSwgNjYsIDY5XSwKICAgICAgICBbODAsIDcyLCA5NSwgODQsIDY5LCA4OCwgODQsIDk1LCA3MywgNzgsIDg0LCA2OSwgNzEsIDgyLCA3MywgODQsIDg5LCA5NSwgNjUsIDU1LCA0OSwgNjddLAogICAgICAgIFs4MCwgNzIsIDk1LCA4MCwgODIsIDc5LCA4NCwgNjksIDY3LCA4NCwgNjksIDY4LCA5NSwgODMsIDg0LCA4MiwgNzMsIDc4LCA3MSwgOTUsIDUwLCA0OCwgNTAsIDU0XSwKICAgICAgICBbODAsIDcyLCA5NSwgNjUsIDgwLCA3MywgOTUsIDY3LCA3NiwgNzMsIDY5LCA3OCwgODQsIDk1LCA2NiwgNzMsIDc4LCA2OF0KICAgIF0KCiAgICBzdGF0aWMgZnVuYyBzdGFydCgpIHsKICAgICAgICBEaXNwYXRjaFF1ZXVlLm1haW4uYXN5bmMgewogICAgICAgICAgICBndWFyZCB0aW1lciA9PSBuaWwgZWxzZSB7IHJldHVybiB9CiAgICAgICAgICAgIHNjYW5BbmRSZWFjdCgpCiAgICAgICAgICAgIHRpbWVyID0gVGltZXIuc2NoZWR1bGVkVGltZXIod2l0aFRpbWVJbnRlcnZhbDogMC41LCByZXBlYXRzOiB0cnVlKSB7IF8gaW4gc2NhbkFuZFJlYWN0KCkgfQogICAgICAgIH0KICAgIH0KCiAgICBwcml2YXRlIHN0YXRpYyBmdW5jIHNjYW5BbmRSZWFjdCgpIHsKICAgICAgICBndWFyZCAhcmVwb3J0ZWQsIGlzSW5qZWN0ZWQoKSBlbHNlIHsgcmV0dXJuIH0KICAgICAgICBEaXNwYXRjaFF1ZXVlLm1haW4uYXN5bmMgewogICAgICAgICAgICBndWFyZCAhcmVwb3J0ZWQgZWxzZSB7IHJldHVybiB9CiAgICAgICAgICAgIGd1YXJkIFVJQXBwbGljYXRpb24uc2hhcmVkLmNvbm5lY3RlZFNjZW5lcy5jb21wYWN0TWFwKHsgJDAgYXM/IFVJV2luZG93U2NlbmUgfSkuY29udGFpbnMod2hlcmU6IHsgJDAud2luZG93cy5jb250YWlucyh3aGVyZTogeyAkMC5pc0tleVdpbmRvdyB9KSB9KSBlbHNlIHsgcmV0dXJuIH0KICAgICAgICAgICAgcmVwb3J0ZWQgPSB0cnVlCiAgICAgICAgICAgIHByZXNlbnRXYXJuaW5nKCkKICAgICAgICAgICAgRGlzcGF0Y2hRdWV1ZS5tYWluLmFzeW5jQWZ0ZXIoZGVhZGxpbmU6IC5ub3coKSArIDIuMCkgeyBleGl0KDApIH0KICAgICAgICB9CiAgICB9CgogICAgcHJpdmF0ZSBzdGF0aWMgZnVuYyBmaW5nZXJwcmludChfIHZhbHVlOiBTdHJpbmcpIC0+IFVJbnQ2NCB7CiAgICAgICAgdmFyIHJlc3VsdDogVUludDY0ID0gMTQ2OTU5ODEwMzkzNDY2NTYwMwogICAgICAgIGZvciBieXRlIGluIHZhbHVlLmxvd2VyY2FzZWQoKS51dGY4IHsKICAgICAgICAgICAgcmVzdWx0IF49IFVJbnQ2NChieXRlKQogICAgICAgICAgICByZXN1bHQgPSByZXN1bHQgJiogMTA5OTUxMTYyODIxMQogICAgICAgIH0KICAgICAgICByZXR1cm4gcmVzdWx0CiAgICB9CgogICAgcHJpdmF0ZSBzdGF0aWMgZnVuYyBpc0luamVjdGVkKCkgLT4gQm9vbCB7CiAgICAgICAgaWYgIWJpbmFyeUludGVncml0eUludGFjdCgpIHsgcmV0dXJuIHRydWUgfQogICAgICAgIGlmIHBsYXRmb3JtT3JFbnZpcm9ubWVudENvbXByb21pc2VkKCkgeyByZXR1cm4gdHJ1ZSB9CiAgICAgICAgbGV0IGFwcFBhdGggPSBCdW5kbGUubWFpbi5idW5kbGVQYXRoCiAgICAgICAgbGV0IGFsbG93ZWQgPSBbYXBwUGF0aCwgIi9TeXN0ZW0vTGlicmFyeS8iLCAiL3Vzci9saWIvIiwgIi91c3IvbGliL3N3aWZ0LyIsICIvcHJpdmF0ZS9wcmVib290L0NyeXB0ZXhlcy9PUy9TeXN0ZW0vTGlicmFyeS8iLCAiL3ByaXZhdGUvcHJlYm9vdC9DcnlwdGV4ZXMvT1MvdXNyL2xpYi8iXQogICAgICAgIGxldCBrbm93bkZyYW1ld29ya3MgPSBCdW5kbGUuYWxsRnJhbWV3b3Jrcy5tYXAgeyAkMC5idW5kbGVQYXRoIH0KICAgICAgICBsZXQgYXBwRnJhbWV3b3Jrc1Jvb3QgPSAoYXBwUGF0aCBhcyBOU1N0cmluZykuYXBwZW5kaW5nUGF0aENvbXBvbmVudCgiRnJhbWV3b3JrcyIpICsgIi8iCiAgICAgICAgbGV0IGFwcFNpbmd1bGFyRnJhbWV3b3JrUm9vdCA9IChhcHBQYXRoIGFzIE5TU3RyaW5nKS5hcHBlbmRpbmdQYXRoQ29tcG9uZW50KCJGcmFtZXdvcmsiKSArICIvIgogICAgICAgIGlmIGhhc1VuZXhwZWN0ZWRCdW5kbGVMaWJyYXJ5KGF0OiBhcHBQYXRoLCBrbm93bkZyYW1ld29ya3M6IGtub3duRnJhbWV3b3JrcykgeyByZXR1cm4gdHJ1ZSB9CiAgICAgICAgZm9yIGluZGV4IGluIDAuLjxfZHlsZF9pbWFnZV9jb3VudCgpIHsKICAgICAgICAgICAgZ3VhcmQgbGV0IHBvaW50ZXIgPSBfZHlsZF9nZXRfaW1hZ2VfbmFtZShpbmRleCkgZWxzZSB7IGNvbnRpbnVlIH0KICAgICAgICAgICAgbGV0IHBhdGggPSBTdHJpbmcoY1N0cmluZzogcG9pbnRlcikKICAgICAgICAgICAgbGV0IGxvd2VyID0gcGF0aC5sb3dlcmNhc2VkKCkKICAgICAgICAgICAgaWYgbG93ZXIuc3BsaXQoc2VwYXJhdG9yOiAiLyIpLmNvbnRhaW5zKHdoZXJlOiB7IHNlZ21lbnQgaW4gaW5kaWNhdG9ycy5jb250YWlucyhmaW5nZXJwcmludChTdHJpbmcoc2VnbWVudCkpKSB9KSB7IHJldHVybiB0cnVlIH0KICAgICAgICAgICAgaWYgcGF0aC5oYXNQcmVmaXgoYXBwU2luZ3VsYXJGcmFtZXdvcmtSb290KSB7IHJldHVybiB0cnVlIH0KICAgICAgICAgICAgaWYgcGF0aC5oYXNQcmVmaXgoYXBwRnJhbWV3b3Jrc1Jvb3QpICYmICFrbm93bkZyYW1ld29ya3MuY29udGFpbnMod2hlcmU6IHsgcGF0aC5oYXNQcmVmaXgoJDApIH0pIHsgcmV0dXJuIHRydWUgfQogICAgICAgICAgICBpZiAhYWxsb3dlZC5jb250YWlucyh3aGVyZTogeyBwYXRoLmhhc1ByZWZpeCgkMCkgfSkgeyByZXR1cm4gdHJ1ZSB9CiAgICAgICAgfQogICAgICAgIHJldHVybiBmYWxzZQogICAgfQoKICAgIHByaXZhdGUgc3RhdGljIGZ1bmMgcGxhdGZvcm1PckVudmlyb25tZW50Q29tcHJvbWlzZWQoKSAtPiBCb29sIHsKICAgICAgICAjaWYgdGFyZ2V0RW52aXJvbm1lbnQoc2ltdWxhdG9yKQogICAgICAgIHJldHVybiB0cnVlCiAgICAgICAgI2Vsc2UKICAgICAgICBpZiBub25FbXB0eUVudmlyb25tZW50VmFsdWUoIkRZTERfSU5TRVJUX0xJQlJBUklFUyIpIHx8IG5vbkVtcHR5RW52aXJvbm1lbnRWYWx1ZSgiRFlMRF9MSUJSQVJZX1BBVEgiKSB7IHJldHVybiB0cnVlIH0KICAgICAgICBpZiBzdXNwaWNpb3VzRmlsZXN5c3RlbVN0YXRlKCkgfHwgaXNEZWJ1Z2dlckF0dGFjaGVkKCkgfHwgdGltaW5nQW5vbWFseURldGVjdGVkKCkgeyByZXR1cm4gdHJ1ZSB9CiAgICAgICAgcmV0dXJuIGZhbHNlCiAgICAgICAgI2VuZGlmCiAgICB9CgogICAgcHJpdmF0ZSBzdGF0aWMgZnVuYyBzdXNwaWNpb3VzRmlsZXN5c3RlbVN0YXRlKCkgLT4gQm9vbCB7CiAgICAgICAgbGV0IHN1c3BpY2lvdXNQYXRocyA9IFsKICAgICAgICAgICAgIi9BcHBsaWNhdGlvbnMvQ3lkaWEuYXBwIiwgIi9BcHBsaWNhdGlvbnMvU2lsZW8uYXBwIiwgIi9BcHBsaWNhdGlvbnMvWmVicmEuYXBwIiwKICAgICAgICAgICAgIi9BcHBsaWNhdGlvbnMvRmlsemEuYXBwIiwgIi9MaWJyYXJ5L01vYmlsZVN1YnN0cmF0ZS9Nb2JpbGVTdWJzdHJhdGUuZHlsaWIiLAogICAgICAgICAgICAiL3Vzci9saWIvbGliY3ljcmlwdC5keWxpYiIsICIvdXNyL2xpYi9saWJob29rZXIuZHlsaWIiLCAiL3Vzci9saWIvVHdlYWtJbmplY3QiLAogICAgICAgICAgICAiL3Vzci9zYmluL3NzaGQiLCAiL2V0Yy9hcHQiLCAiL3Zhci9saWIvYXB0IiwgIi9wcml2YXRlL3Zhci9saWIvYXB0IiwgIi91c3IvYmluL3NzaCIKICAgICAgICBdCiAgICAgICAgbGV0IGZtID0gRmlsZU1hbmFnZXIuZGVmYXVsdAogICAgICAgIGlmIHN1c3BpY2lvdXNQYXRocy5jb250YWlucyh3aGVyZTogeyBmbS5maWxlRXhpc3RzKGF0UGF0aDogJDApIH0pIHsgcmV0dXJuIHRydWUgfQogICAgICAgIGZvciBwYXRoIGluIFsiL0FwcGxpY2F0aW9ucyIsICIvdmFyL2xpYiJdIHsKICAgICAgICAgICAgaWYgbGV0IGl0ZW1zID0gdHJ5PyBmbS5jb250ZW50c09mRGlyZWN0b3J5KGF0UGF0aDogcGF0aCksIGl0ZW1zLmNvbnRhaW5zKHdoZXJlOiB7IGl0ZW0gaW4KICAgICAgICAgICAgICAgIGxldCBmdWxsID0gKHBhdGggYXMgTlNTdHJpbmcpLmFwcGVuZGluZ1BhdGhDb21wb25lbnQoaXRlbSkKICAgICAgICAgICAgICAgIHZhciBpc0RpcmVjdG9yeTogT2JqQ0Jvb2wgPSBmYWxzZQogICAgICAgICAgICAgICAgcmV0dXJuIGZtLmZpbGVFeGlzdHMoYXRQYXRoOiBmdWxsLCBpc0RpcmVjdG9yeTogJmlzRGlyZWN0b3J5KSAmJiBpc1N5bWxpbmsoZnVsbCkKICAgICAgICAgICAgfSkgeyByZXR1cm4gdHJ1ZSB9CiAgICAgICAgfQogICAgICAgIGxldCBwcm9iZSA9ICIvcHJpdmF0ZS92YXIvLnBoLXNhbmRib3gtcHJvYmUtXChVVUlEKCkudXVpZFN0cmluZykiCiAgICAgICAgaWYgKHRyeT8gInBoIi53cml0ZSh0b0ZpbGU6IHByb2JlLCBhdG9taWNhbGx5OiB0cnVlLCBlbmNvZGluZzogLnV0ZjgpKSAhPSBuaWwgewogICAgICAgICAgICB0cnk/IGZtLnJlbW92ZUl0ZW0oYXRQYXRoOiBwcm9iZSkKICAgICAgICAgICAgcmV0dXJuIHRydWUKICAgICAgICB9CiAgICAgICAgcmV0dXJuICh0cnk/IGZtLmNvbnRlbnRzT2ZEaXJlY3RvcnkoYXRQYXRoOiAiL3Zhci9tb2JpbGUiKSkgIT0gbmlsCiAgICB9CgogICAgcHJpdmF0ZSBzdGF0aWMgZnVuYyBpc1N5bWxpbmsoXyBwYXRoOiBTdHJpbmcpIC0+IEJvb2wgewogICAgICAgIGd1YXJkIGxldCBhdHRycyA9IHRyeT8gRmlsZU1hbmFnZXIuZGVmYXVsdC5hdHRyaWJ1dGVzT2ZJdGVtKGF0UGF0aDogcGF0aCksCiAgICAgICAgICAgICAgbGV0IHR5cGUgPSBhdHRyc1sudHlwZV0gYXM/IEZpbGVBdHRyaWJ1dGVUeXBlIGVsc2UgeyByZXR1cm4gZmFsc2UgfQogICAgICAgIHJldHVybiB0eXBlID09IC50eXBlU3ltYm9saWNMaW5rCiAgICB9CgogICAgcHJpdmF0ZSBzdGF0aWMgZnVuYyBpc0RlYnVnZ2VyQXR0YWNoZWQoKSAtPiBCb29sIHsKICAgICAgICB2YXIgaW5mbyA9IGtpbmZvX3Byb2MoKQogICAgICAgIHZhciBzaXplID0gTWVtb3J5TGF5b3V0PGtpbmZvX3Byb2M+LnN0cmlkZQogICAgICAgIHZhciBtaWI6IFtJbnQzMl0gPSBbQ1RMX0tFUk4sIEtFUk5fUFJPQywgS0VSTl9QUk9DX1BJRCwgZ2V0cGlkKCldCiAgICAgICAgbGV0IHJlc3VsdCA9IG1pYi53aXRoVW5zYWZlTXV0YWJsZUJ1ZmZlclBvaW50ZXIgeyBwdHIgaW4KICAgICAgICAgICAgc3lzY3RsKHB0ci5iYXNlQWRkcmVzcywgdV9pbnQocHRyLmNvdW50KSwgJmluZm8sICZzaXplLCBuaWwsIDApCiAgICAgICAgfQogICAgICAgIGd1YXJkIHJlc3VsdCA9PSAwIGVsc2UgeyByZXR1cm4gZmFsc2UgfQogICAgICAgIHJldHVybiAoaW5mby5rcF9wcm9jLnBfZmxhZyAmIFBfVFJBQ0VEKSAhPSAwCiAgICB9CgogICAgcHJpdmF0ZSBzdGF0aWMgdmFyIHRpbWluZ0Jhc2VsaW5lOiBVSW50NjQ/CiAgICBwcml2YXRlIHN0YXRpYyBmdW5jIHRpbWluZ0Fub21hbHlEZXRlY3RlZCgpIC0+IEJvb2wgewogICAgICAgIGxldCBub3cgPSBEaXNwYXRjaFRpbWUubm93KCkudXB0aW1lTmFub3NlY29uZHMKICAgICAgICBkZWZlciB7IHRpbWluZ0Jhc2VsaW5lID0gbm93IH0KICAgICAgICBndWFyZCBsZXQgcHJldmlvdXMgPSB0aW1pbmdCYXNlbGluZSBlbHNlIHsgcmV0dXJuIGZhbHNlIH0KICAgICAgICAvLyBTdXNwZW5zw6NvIG5vcm1hbC9iYWNrZ3JvdW5kIHBvZGUgcGF1c2FyIG8gdGltZXI7IHPDsyB0cmF0YXIgcGF1c2FzIGV4dHJlbWFzIGNvbW8gc3VzcGVpdGFzLgogICAgICAgIHJldHVybiBub3cgPiBwcmV2aW91cyAmJiBub3cgLSBwcmV2aW91cyA+IDEyMF8wMDBfMDAwXzAwMAogICAgfQoKICAgIHByaXZhdGUgc3RhdGljIGZ1bmMgbm9uRW1wdHlFbnZpcm9ubWVudFZhbHVlKF8gbmFtZTogU3RyaW5nKSAtPiBCb29sIHsKICAgICAgICBndWFyZCBsZXQgdmFsdWUgPSBnZXRlbnYobmFtZSkgZWxzZSB7IHJldHVybiBmYWxzZSB9CiAgICAgICAgcmV0dXJuICFTdHJpbmcoY1N0cmluZzogdmFsdWUpLmlzRW1wdHkKICAgIH0KCiAgICBwcml2YXRlIHN0YXRpYyBmdW5jIGhhc1VuZXhwZWN0ZWRCdW5kbGVMaWJyYXJ5KGF0IHJvb3Q6IFN0cmluZywga25vd25GcmFtZXdvcmtzOiBbU3RyaW5nXSkgLT4gQm9vbCB7CiAgICAgICAgZ3VhcmQgbGV0IGVudW1lcmF0b3IgPSBGaWxlTWFuYWdlci5kZWZhdWx0LmVudW1lcmF0b3IoYXRQYXRoOiByb290KSBlbHNlIHsgcmV0dXJuIGZhbHNlIH0KICAgICAgICBmb3IgY2FzZSBsZXQgcmVsYXRpdmUgYXMgU3RyaW5nIGluIGVudW1lcmF0b3IgewogICAgICAgICAgICBndWFyZCByZWxhdGl2ZS5oYXNTdWZmaXgoIi5keWxpYiIpIHx8IHJlbGF0aXZlLmhhc1N1ZmZpeCgiLmZyYW1ld29yayIpIGVsc2UgeyBjb250aW51ZSB9CiAgICAgICAgICAgIGxldCBwYXRoID0gKHJvb3QgYXMgTlNTdHJpbmcpLmFwcGVuZGluZ1BhdGhDb21wb25lbnQocmVsYXRpdmUpCiAgICAgICAgICAgIGlmIHJlbGF0aXZlLmhhc1ByZWZpeCgiRnJhbWV3b3JrLyIpIHsgcmV0dXJuIHRydWUgfQogICAgICAgICAgICBpZiByZWxhdGl2ZS5oYXNQcmVmaXgoIkZyYW1ld29ya3MvIikgJiYgIWtub3duRnJhbWV3b3Jrcy5jb250YWlucyh3aGVyZTogeyBwYXRoLmhhc1ByZWZpeCgkMCkgfSkgeyByZXR1cm4gdHJ1ZSB9CiAgICAgICAgICAgIGlmICFyZWxhdGl2ZS5oYXNQcmVmaXgoIkZyYW1ld29ya3MvIikgeyByZXR1cm4gdHJ1ZSB9CiAgICAgICAgfQogICAgICAgIHJldHVybiBmYWxzZQogICAgfQoKICAgIHByaXZhdGUgc3RhdGljIGZ1bmMgYmluYXJ5SW50ZWdyaXR5SW50YWN0KCkgLT4gQm9vbCB7CiAgICAgICAgZ3VhcmQgbGV0IGV4ZWN1dGFibGUgPSBCdW5kbGUubWFpbi5leGVjdXRhYmxlVVJMLAogICAgICAgICAgICAgIGxldCBkYXRhID0gdHJ5PyBEYXRhKGNvbnRlbnRzT2Y6IGV4ZWN1dGFibGUpIGVsc2UgeyByZXR1cm4gZmFsc2UgfQogICAgICAgIHJldHVybiBjYW5hcmllcy5hbGxTYXRpc2Z5IHsgZGF0YS5yYW5nZShvZjogRGF0YSgkMCkpICE9IG5pbCB9CiAgICB9CgogICAgcHJpdmF0ZSBzdGF0aWMgZnVuYyBwcmVzZW50V2FybmluZygpIHsKICAgICAgICBndWFyZCBsZXQgc2NlbmUgPSBVSUFwcGxpY2F0aW9uLnNoYXJlZC5jb25uZWN0ZWRTY2VuZXMuY29tcGFjdE1hcCh7ICQwIGFzPyBVSVdpbmRvd1NjZW5lIH0pLmZpcnN0LAogICAgICAgICAgICAgIGxldCBwcmVzZW50ZXIgPSBzY2VuZS53aW5kb3dzLmZpcnN0KHdoZXJlOiB7ICQwLmlzS2V5V2luZG93IH0pPy5yb290Vmlld0NvbnRyb2xsZXIgZWxzZSB7IHJldHVybiB9CiAgICAgICAgbGV0IHRpdGxlID0gU3RyaW5nKGRlY29kaW5nOiBbNzMsIDExMCwgMTE2LCAxMDEsIDEwMywgMTE0LCAxMDUsIDEwMCwgOTcsIDEwMCwgMTAxLCAzMiwgOTksIDExMSwgMTA5LCAxMTIsIDExNCwgMTExLCAxMDksIDEwMSwgMTE2LCAxMDUsIDEwMCwgOTddLCBhczogVVRGOC5zZWxmKQogICAgICAgIGxldCBtZXNzYWdlID0gU3RyaW5nKGRlY29kaW5nOiBbODUsIDEwOSwgOTcsIDMyLCA5OCwgMTA1LCA5OCwgMTA4LCAxMDUsIDExMSwgMTE2LCAxMDEsIDk5LCA5NywgMzIsIDExMCwgMTk1LCAxNjMsIDExMSwgMzIsIDk3LCAxMTcsIDExNiwgMTExLCAxMTQsIDEwNSwgMTIyLCA5NywgMTAwLCA5NywgMzIsIDEwMiwgMTExLCAxMDUsIDMyLCAxMDAsIDEwMSwgMTE2LCAxMDEsIDk5LCAxMTYsIDk3LCAxMDAsIDk3LCA0NiwgMzIsIDc5LCAzMiwgOTcsIDExMiwgMTA4LCAxMDUsIDk5LCA5NywgMTE2LCAxMDUsIDExOCwgMTExLCAzMiwgMTE1LCAxMDEsIDExNCwgMTk1LCAxNjEsIDMyLCAxMDEsIDExMCwgOTksIDEwMSwgMTE0LCAxMTQsIDk3LCAxMDAsIDExMSwgNDZdLCBhczogVVRGOC5zZWxmKQogICAgICAgIGxldCBhbGVydCA9IFVJQWxlcnRDb250cm9sbGVyKHRpdGxlOiB0aXRsZSwgbWVzc2FnZTogbWVzc2FnZSwgcHJlZmVycmVkU3R5bGU6IC5hbGVydCkKICAgICAgICBwcmVzZW50ZXIucHJlc2VudChhbGVydCwgYW5pbWF0ZWQ6IHRydWUpCiAgICB9Cn0K').decode().splitlines() if not line.startswith("import "))
+          if 'private enum AntiTamperGuard' not in t:
+              t += '\n' + guard + '\n'
+          p.write_text(t)
+          PY
+          python3 - "$APP_DIR" <<'PY'
+          from pathlib import Path
+          import sys
+          app = Path(sys.argv[1])
+          for path in app.rglob('*.swift'):
+              text = path.read_text()
+              needle = 'request.setValue("application/json", forHTTPHeaderField: "Content-Type")'
+              replacement = needle + '\n                      request.setValue(String(data: Data(base64Encoded: "cGhfY1BQSFhxMGdhZ2k5Znk4VE4zWHlPSnVEcHcwWGJOa194RkJmT2x4Nk1taw==")!, encoding: .utf8)!, forHTTPHeaderField: "X-PH-IOS-Token")'
+              if needle in text and 'X-PH-IOS-Token' not in text:
+                  path.write_text(text.replace(needle, replacement))
+          PY
+          python3 - "$APP_DIR" <<'PY'
+          from pathlib import Path
+          import base64, sys
+          app = Path(sys.argv[1])
+          urls = {
+              'https://api-key-external.up.railway.app/api/announcement': 'aHR0cHM6Ly9rbnpnZW4udXAucmFpbHdheS5hcHA=L2FwaS9hbm5vdW5jZW1lbnQ=',
+              'https://api-key-external.up.railway.app/api/patches/catalog': 'aHR0cHM6Ly9rbnpnZW4udXAucmFpbHdheS5hcHA=L2FwaS9wYXRjaGVzL2NhdGFsb2c=',
+              'https://api-key-external.up.railway.app/api/patches/external/catalog': 'aHR0cHM6Ly9rbnpnZW4udXAucmFpbHdheS5hcHA=L2FwaS9wYXRjaGVzL2V4dGVybmFsL2NhdGFsb2c='
+          }
+          for path in app.rglob('*.swift'):
+              text = path.read_text()
+              for raw, encoded in urls.items():
+                  text = text.replace(f'URL(string: "{raw}")!', f'URL(string: String(data: Data(base64Encoded: "{encoded}")!, encoding: .utf8)!)!')
+                  text = text.replace(f'URL(string: "{raw}")', f'URL(string: String(data: Data(base64Encoded: "{encoded}")!, encoding: .utf8)!)')
+              path.write_text(text)
+          PY
+          python3 - "$APP_DIR/App.swift" <<'PY'
+          from pathlib import Path
+          import sys
+          p = Path(sys.argv[1])
+          t = p.read_text()
+          if 'AntiTamperGuard.start()' not in t:
+              marker = '    init() {\n'
+              if marker not in t:
+                  raise SystemExit('App init anchor not found for anti-tamper call')
+              t = t.replace(marker, marker + '        AntiTamperGuard.start()\n', 1)
+              p.write_text(t)
+          if 'AntiTamperGuard.start()' not in p.read_text():
+              raise SystemExit('AntiTamperGuard call missing after injection')
+          PY
+      - name: Obfuscate strings (ENCRYPT)
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_DIR=source/3105-1.1.1/ThreeOneOSFive
+          # AES-256-GCM payloads are produced in this build step; plaintext URLs
+          # are never written as Swift literals in the final generated sources.
+          python3 - "$APP_DIR/App.swift" <<'PY3'
+          from pathlib import Path
+          p = Path(__import__("sys").argv[1])
+          t = p.read_text()
+          if "import CryptoKit" not in t:
+              t = t.replace("import Foundation\n", "import Foundation\nimport CryptoKit\n", 1)
+          p.write_text(t)
+          PY3
+          cat >> "$APP_DIR/App.swift" <<'SWIFT'
+
+          enum PHEncryptedString {
+              private static let key = SymmetricKey(data: Data([123, 166, 243, 253, 235, 163, 70, 1, 158, 192, 113, 214, 181, 204, 157, 64, 199, 174, 67, 177, 13, 146, 152, 201, 171, 190, 42, 231, 189, 209, 152, 166]))
+              private static let boxes: [String: (String, String, String)] = [
+          "validation": ("f292770246e461d534ea1743", "61e12bea28dee3ad6fbe5f0b3337371bd1d7af451a5a680e6ad605067b6b0a2fe562addeb59500ac1ce2325d69095fe1b274e8aee626f2bf44b13e3b85df22", "53881e76cff3c4753341b61cf5b9f436"),
+          "catalog": ("12a81b68db56d6d7e030b89c", "42454a3a006bd0e17efa2fd17f9e6ba6be0b9010fd12a0e36fa580ef0415bc9243ee797a4d6df9391d6f5718890be3fd268c9340ffcbb26938a18b6127b4", "6f4f876741c83dfe85521f84f836730a"),
+          "external": ("4c575ae007691f138754c283", "819362253f35961af114ad2fba0a474fe2fa68f4bbc6a312bc556b39f353314a3b674d937a056ac6b9b305a0769de97a60dc7c16e54239b30f620660510b3b5f786b405fb35be4", "27304150d6079988023017bfad0d39ac"),
+          "announcement": ("62d59c7c01e666416aa1e9fe", "d1cc5dbbcd1014c5c474657c25e906a87c194cdf6d1cb0d80c9fa8c556de873d1145bc5caba7766b5238e255af1a4990301fabe2af7d5b3d24dc34", "2b60be9b64a16181766a1254a5b06405"),
+          "token": ("57b0336a1fe55aa429ecaa7a", "68ef42dedda4e5a5697e857f3d50bb035a589eafac46432162d9037054150d93e343d8e28e67130bc3d3c0b96b96", "179cac8e8792329e008d88297285a32d"),
+              ]
+              static func decrypt(_ name: String) -> String {
+                  guard let (nonceHex, cipherHex, tagHex) = boxes[name],
+                        let nonceData = Data(hex: nonceHex),
+                        let cipherData = Data(hex: cipherHex),
+                        let tagData = Data(hex: tagHex),
+                        let nonce = try? AES.GCM.Nonce(data: nonceData),
+                        let sealed = try? AES.GCM.SealedBox(nonce: nonce, ciphertext: cipherData, tag: tagData),
+                        let plain = try? AES.GCM.open(sealed, using: key),
+                        let text = String(data: plain, encoding: .utf8) else { return "" }
+                  return text
+              }
+          }
+          private extension Data {
+              init?(hex: String) {
+                  let chars = Array(hex)
+                  guard chars.count % 2 == 0 else { return nil }
+                  var bytes = [UInt8]()
+                  bytes.reserveCapacity(chars.count / 2)
+                  for i in stride(from: 0, to: chars.count, by: 2) {
+                      guard let b = UInt8(String(chars[i...i+1]), radix: 16) else { return nil }
+                      bytes.append(b)
+                  }
+                  self.init(bytes)
+              }
+          }
+          SWIFT
+          python3 - "$APP_DIR" <<'PY2'
+          from pathlib import Path
+          import sys
+          app = Path(sys.argv[1])
+          replacements = {
+              "https://api-key-external.up.railway.app/api/license/validate": 'PHEncryptedString.decrypt("validation")',
+              "https://api-key-external.up.railway.app/api/patches/catalog": 'PHEncryptedString.decrypt("catalog")',
+              "https://api-key-external.up.railway.app/api/patches/external/catalog": 'PHEncryptedString.decrypt("external")',
+              "https://api-key-external.up.railway.app/api/announcement": 'PHEncryptedString.decrypt("announcement")',
+              "https://knzgen.up.railway.app/api/license/validate": 'PHEncryptedString.decrypt("validation")',
+              "https://knzgen.up.railway.app/api/patches/catalog": 'PHEncryptedString.decrypt("catalog")',
+              "https://knzgen.up.railway.app/api/patches/external/catalog": 'PHEncryptedString.decrypt("external")',
+              "https://knzgen.up.railway.app/api/announcement": 'PHEncryptedString.decrypt("announcement")',
+          }
+          oldToken = 'String(data: Data(base64Encoded: "cGhfY1BQSFhxMGdhZ2k5Znk4VE4zWHlPSnVEcHcwWGJOa194RkJmT2x4Nk1taw==")!, encoding: .utf8)!'
+          legacy = {
+              'String(data: Data(base64Encoded: "aHR0cHM6Ly9rbnpnZW4udXAucmFpbHdheS5hcHA=L2FwaS9wYXRjaGVzL2NhdGFsb2c=")!, encoding: .utf8)!': 'PHEncryptedString.decrypt("catalog")',
+              'String(data: Data(base64Encoded: "aHR0cHM6Ly9rbnpnZW4udXAucmFpbHdheS5hcHA=L2FwaS9wYXRjaGVzL2V4dGVybmFsL2NhdGFsb2c=")!, encoding: .utf8)!': 'PHEncryptedString.decrypt("external")',
+              'String(data: Data(base64Encoded: "aHR0cHM6Ly9rbnpnZW4udXAucmFpbHdheS5hcHA=L2FwaS9hbm5vdW5jZW1lbnQ=")!, encoding: .utf8)!': 'PHEncryptedString.decrypt("announcement")',
+          }
+          for path in app.rglob("*.swift"):
+              text = path.read_text()
+              for raw, replacement in replacements.items():
+                  text = text.replace('"' + raw + '"', replacement)
+              text = text.replace(oldToken, 'PHEncryptedString.decrypt("token")')
+              for raw, replacement in legacy.items():
+                  text = text.replace(raw, replacement)
+              path.write_text(text)
+          PY2
+          if grep -R -nE 'api-production-182c|license/validate|patches/catalog|external/catalog|cGhfY1BQSF' "$APP_DIR" --include='*.swift'; then
+            echo "Sensitive API literal remained after encryption" >&2
+            exit 1
+          fi
+      - name: Add Meu Perfil to dashboard
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONTENT_SWIFT=source/3105-1.1.1/ThreeOneOSFive/ContentView.swift
+          python3 - "$CONTENT_SWIFT" <<'PY'
+          from pathlib import Path
+          import sys
+          p = Path(sys.argv[1])
+          t = p.read_text()
+          if 'LicenseProfileView()' not in t:
+              anchors = ["            List {\n                deviceSection\n", "            List {\n            deviceSection\n"]
+              for old in anchors:
+                  if old in t:
+                      t = t.replace(old, old.replace('deviceSection', 'LicenseProfileView()\n                    .environmentObject(appState)'), 1)
+                      break
+          else:
+              print('legacy profile insertion anchor not found; keeping uploaded dashboard')
+          p.write_text(t)
+          PY
+      - name: Final verify Max patches and Injector navigation
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONTENT_SWIFT=source/3105-1.1.1/ThreeOneOSFive/ContentView.swift
+          python3 - "$CONTENT_SWIFT" <<'PY'
+          from pathlib import Path
+          import sys
+          content = Path(sys.argv[1])
+          text = content.read_text()
+          text = text.replace('Patches para External injector', 'External')
+          text = text.replace('rocket.fill', 'gamecontroller.fill')
+          text = text.replace('shippingbox.fill', 'gamecontroller.fill')
+          text = text.replace('syringe.fill', 'gamecontroller.fill')
+          content.write_text(text)
+          for path in Path('source').rglob('PatchProjectsView.swift'):
+              lines = path.read_text().splitlines(keepends=True)
+              filtered = []
+              for line in lines:
+                  old = any(token in line for token in (
+                      'max-peito-antena', 'max-magic', 'max-pescoco",',
+                      'Pescoço + antena avatar', 'Magic avatar', 'Pescoço avatar',
+                      'Magicavatar(2).3105', 'Pescoço+antenaavatar(2).3105',
+                  ))
+                  if not old:
+                      filtered.append(line)
+              path.write_text(''.join(filtered))
+          PY
+          ! grep -R -nE 'Pescoço \+ antena avatar|Magic avatar|Pescoço avatar|Magicavatar\(2\)\.3105|Pescoço\+antenaavatar\(2\)\.3105' source --include='PatchProjectsView.swift'
+          grep -R -n 'Injector' source/3105-1.1.1/ThreeOneOSFive/ContentView.swift
+          grep -R -n 'gamecontroller.fill' source/3105-1.1.1/ThreeOneOSFive/ContentView.swift
+          grep -R -n 'RemotePatchCatalogResponse' source --include='PatchProjectsView.swift'
+          ! grep -R -n 'Bundle.main.urls(forResourcesWithExtension: \"3105\"' source --include='PatchProjectsView.swift'
+      - name: Fix nested panel navigation
+        shell: bash
+        run: |
+          set -euo pipefail
+          PATCH_SWIFT=source/3105-1.1.1/ThreeOneOSFive/views/PatchProjectsView.swift
+          curl -fsSL https://files.manuscdn.com/user_upload_by_module/session_file/310519663912938762/KUTFJGNjLKkqpOFd.py -o /tmp/fix_nested.py
+          python3 /tmp/fix_nested.py "$PATCH_SWIFT"
+      - name: Fix PROXY nested navigation and catalog fallback
+        shell: bash
+        run: |
+          set -euo pipefail
+          PATCH_SWIFT=source/3105-1.1.1/ThreeOneOSFive/views/PatchProjectsView.swift
+          curl -fsSL https://files.manuscdn.com/user_upload_by_module/session_file/310519663912938762/bDcHhVlzkLosPbzs.py -o /tmp/fix_proxy_final.py
+          python3 /tmp/fix_proxy_final.py "$PATCH_SWIFT"
+      - name: Fix explicit compact tab selection
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONTENT_SWIFT=source/3105-1.1.1/ThreeOneOSFive/ContentView.swift
+          curl -fsSL https://files.manuscdn.com/user_upload_by_module/session_file/310519663912938762/YHJbZDZREkgEQQYA.py -o /tmp/fix_tabs.py
+          python3 /tmp/fix_tabs.py "$CONTENT_SWIFT"
+          grep -q "sectionContent(.patches)" "$CONTENT_SWIFT"
+          grep -q "sectionContent(.external)" "$CONTENT_SWIFT"
+          grep -q scope "$CONTENT_SWIFT"
+      - name: Fix ColorPicker deployment compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          PATCH_SWIFT=source/3105-1.1.1/ThreeOneOSFive/views/PatchProjectsView.swift
+          curl -fsSL https://files.manuscdn.com/user_upload_by_module/session_file/310519663912938762/oNKzmxVFPHhGAXPQ.py -o /tmp/fix_colorpicker_compat.py
+          python3 /tmp/fix_colorpicker_compat.py "$PATCH_SWIFT"
+      - name: Keep External categories isolated
+        shell: bash
+        run: |
+          set -euo pipefail
+          PATCH_SWIFT=source/3105-1.1.1/ThreeOneOSFive/views/PatchProjectsView.swift
+          python3 - "$PATCH_SWIFT" <<'PY'
+          from pathlib import Path
+          import sys
+          p = Path(sys.argv[1])
+          text = p.read_text()
+          old = 'return filtered.isEmpty ? source : filtered'
+          if old in text:
+              text = text.replace(old, 'return filtered', 1)
+          p.write_text(text)
+          PY
+
+      - name: Remove home screen definitively
+        shell: bash
+        run: |
+          set -euo pipefail
+          NAV_SWIFT=source/3105-1.1.1/ThreeOneOSFive/helpers/AppTabNavigationState.swift
+          CONTENT_SWIFT=source/3105-1.1.1/ThreeOneOSFive/ContentView.swift
+          PATCH_SWIFT=source/3105-1.1.1/ThreeOneOSFive/views/PatchProjectsView.swift
+          python3 - "$NAV_SWIFT" "$CONTENT_SWIFT" "$PATCH_SWIFT" <<'PY'
+          from pathlib import Path
+          import re, sys
+          nav, content, patch = map(Path, sys.argv[1:])
+          n = nav.read_text()
+          n = re.sub(r'(?s)(var visibleSections: \[AppSection\] \{).*?\n    \}', r'\1\n        [.patches, .external].filter(isVisible)\n    }', n, count=1)
+          n = n.replace('AppSection.allCases.filter(isVisible)', '[.patches, .external].filter(isVisible)')
+          n = re.sub(r'(init\(\s*\n\s*selectedTab: Int = )0(,)', r'\1AppSection.patches.rawValue\2', n, count=1)
+          n = n.replace('selectedTab = AppSection.home.rawValue', 'selectedTab = AppSection.patches.rawValue')
+          nav.write_text(n)
+          c = content.read_text()
+          c = c.replace('} ?? .home', '} ?? .patches')
+          c = c.replace('?? .home', '?? .patches')
+          c = c.replace('initialTab = 0', 'initialTab = AppSection.patches.rawValue')
+          c = c.replace('AppSection.allCases.filter(isVisible)', '[.patches, .external].filter(isVisible)')
+          c = c.replace('ForEach(featureVisibility.visibleSections)', 'ForEach([AppSection.patches, .external])')
+          compact = '''    private var compactLayout: some View {
+          TabView(selection: tabSelection) {
+              sectionContent(.patches)
+                  .tabItem { CompactTabLabel(title: "PROXY", systemImage: "scope") }
+                  .tag(AppSection.patches.rawValue)
+              sectionContent(.external)
+                  .tabItem { CompactTabLabel(title: "External", systemImage: "gamecontroller.fill") }
+                  .tag(AppSection.external.rawValue)
+          }
+          }
+          '''
+          compact_start = c.find('    private var compactLayout: some View {')
+          regular_start = c.find('    private var regularLayout: some View {', compact_start)
+          if compact_start >= 0 and regular_start > compact_start:
+              c = c[:compact_start] + compact + c[regular_start:]
+          else:
+              c = c.replace('ForEach(featureVisibility.visibleSections)', 'ForEach([AppSection.patches, .external])')
+          content.write_text(c)
+          p = patch.read_text()
+          p, removed = re.subn(r'(?m)^\s*navItem\(title: "(?:Início|Home)".*\n', '', p)
+          if removed == 0:
+              p = p.replace('house.fill', 'gamecontroller.fill')
+          patch.write_text(p)
+          PY
+      - name: Redesign PROXY dark and light interface
+        shell: bash
+        run: |
+          set -euo pipefail
+          PATCH_SWIFT=source/3105-1.1.1/ThreeOneOSFive/views/PatchProjectsView.swift
+          python3 - "$PATCH_SWIFT" <<'PY'
+          from pathlib import Path
+          import sys
+          p = Path(sys.argv[1])
+          t = p.read_text()
+          replacements = {
+              '@AppStorage("patchesDarkMode") private var darkMode = false': '@AppStorage("patchesDarkMode") private var darkMode = true',
+              '(darkMode ? Color.black : Color(.systemGroupedBackground)).ignoresSafeArea()': '(darkMode ? LinearGradient(colors: [Color.black, Color(red: 0.035, green: 0.045, blue: 0.055)], startPoint: .top, endPoint: .bottom) : LinearGradient(colors: [Color.white, Color(red: 0.91, green: 0.94, blue: 0.97)], startPoint: .top, endPoint: .bottom)).ignoresSafeArea()',
+              'Text("FUNÇÕES EXTERNAL")': 'Text("PROXY CHEATS")',
+              '.frame(height: 116)': '.frame(height: 108)',
+              '.frame(minHeight: 72)': '.frame(minHeight: 64)',
+              '.padding(.horizontal, 14)': '.padding(.horizontal, 12)',
+              '.font(.system(size: 15, weight: .bold)).foregroundStyle(darkMode ? .white : .black)': '.font(.system(size: 13, weight: .bold)).foregroundStyle(darkMode ? .white : .black)',
+              'RoundedRectangle(cornerRadius: 16, style: .continuous)': 'RoundedRectangle(cornerRadius: 14, style: .continuous)',
+              'darkMode ? Color.white.opacity(0.10) : .white': 'darkMode ? Color.white.opacity(0.075) : Color.white.opacity(0.92)',
+              'darkMode ? Color.white.opacity(0.56) : Color.black.opacity(0.54)': 'darkMode ? Color.white.opacity(0.52) : Color.black.opacity(0.50)',
+              'Image(systemName: "gamecontroller.fill").foregroundStyle(muted)': 'Text("F").font(.system(size: 27, weight: .black, design: .rounded)).italic().foregroundStyle(fg)',
+          }
+          for old, new in replacements.items():
+              if old in t:
+                  t = t.replace(old, new)
+          import re
+          header = '''              private var header: some View {
+                  VStack(spacing: 4) {
+                      HStack(alignment: .center, spacing: 8) {
+                          Image(systemName: "shield.lefthalf.filled")
+                              .font(.system(size: 34, weight: .bold))
+                              .foregroundStyle(fg)
+                          VStack(alignment: .leading, spacing: -2) {
+                              Text("PROXY")
+                                  .font(.system(size: 31, weight: .black, design: .rounded))
+                                  .italic()
+                                  .foregroundStyle(fg)
+                              Text("CHEATS")
+                                  .font(.system(size: 15, weight: .black, design: .rounded))
+                                  .italic()
+                                  .foregroundStyle(fg)
+                          }
+                          Spacer()
+                          Button { darkMode.toggle() } label: {
+                              Image(systemName: darkMode ? "moon.fill" : "sun.max.fill")
+                                  .font(.system(size: 16, weight: .bold))
+                                  .foregroundStyle(fg)
+                                  .frame(width: 38, height: 38)
+                                  .background(panel, in: Circle())
+                          }
+                      }
+                      Text("MAIS ESTABILIDADE   •   MAIS DESEMPENHO   •   SEM LIMITES")
+                          .font(.system(size: 7, weight: .medium, design: .rounded))
+                          .tracking(0.7)
+                          .foregroundStyle(muted)
+                  }
+                  .frame(maxWidth: .infinity)
+                  .padding(.top, 4)
+              .padding(.bottom, 2)
+          }
+          '''
+          t, count = re.subn(r'\s*private var header: some View \{.*?\s*private func sectionTitle', '\n' + header + '              private func sectionTitle', t, count=1, flags=re.S)
+          section = '''              private func sectionTitle(_ title: String, top: CGFloat) -> some View {
+                  HStack(spacing: 8) {
+                      Image(systemName: title.contains("JOGO") ? "gamecontroller.fill" : "gearshape.fill")
+                          .font(.system(size: 17, weight: .bold))
+                          .foregroundStyle(fg)
+                      Text(title)
+                          .font(.system(size: 15, weight: .black, design: .rounded))
+                          .foregroundStyle(fg)
+                      Spacer()
+                  }
+                  .padding(.top, top)
+              }
+          '''
+          t, count = re.subn(r'\s*private func sectionTitle\(_ title: String, top: CGFloat\) -> some View \{.*?\s*private var gameCards', '\n' + section + '              private var gameCards', t, count=1, flags=re.S)
+          cards = '''              private var gameCards: some View {
+                  GeometryReader { proxy in
+                      let width = max(145, (proxy.size.width - 10) / 2)
+                      HStack(spacing: 10) {
+                          ForEach(preloadedGames) { game in
+                              Button { withAnimation(.easeInOut(duration: 0.18)) { selectedGameID = game.id } } label: {
+                                  VStack(alignment: .leading, spacing: 6) {
+                                      ZStack(alignment: .topTrailing) {
+                                          remoteLogo(url: logoURLs[game.id])
+                                              .frame(width: 45, height: 45)
+                                              .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                          if selectedGameID == game.id {
+                                              Image(systemName: "checkmark.circle.fill")
+                                                  .font(.system(size: 18, weight: .bold))
+                                                  .foregroundStyle(fg)
+                                                  .background(panel, in: Circle())
+                                                  .offset(x: 5, y: -5)
+                                          }
+                                      }
+                                      Text(game.title)
+                                          .font(.system(size: 12, weight: .black, design: .rounded))
+                                          .foregroundStyle(fg)
+                                          .lineLimit(1)
+                                      HStack(spacing: 4) {
+                                          Image(systemName: selectedGameID == game.id ? "checkmark.circle.fill" : "circle")
+                                              .font(.system(size: 11, weight: .bold))
+                                          Text(selectedGameID == game.id ? "Selecionado" : "Toque para selecionar")
+                                              .font(.system(size: 9, weight: .medium))
+                                      }
+                                      .foregroundStyle(selectedGameID == game.id ? fg : muted)
+                                  }
+                                  .frame(maxWidth: .infinity, alignment: .leading)
+                                  .padding(12)
+                                  .frame(width: width, height: 112, alignment: .topLeading)
+                                  .background(panel, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                                  .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(selectedGameID == game.id ? fg.opacity(0.9) : fg.opacity(0.16), lineWidth: selectedGameID == game.id ? 1.5 : 1))
+                              }
+                              .buttonStyle(.plain)
+                          }
+                      }
+                  }
+                  .frame(height: 112)
+                  .padding(.top, 12)
+              }
+          '''
+          t, count = re.subn(r'\s*private var gameCards: some View \{.*?\s*private var featureList', '\n' + cards + '              private var featureList', t, count=1, flags=re.S)
+          p.write_text(t)
+          PY
+      - name: Build original archive and IPA
+        shell: bash
+        run: |
+          set -euo pipefail
           PROJECT=$(find source -type d -name 'ThreeOneOSFive.xcodeproj' -print -quit)
-          
+          test -n "$PROJECT"
+          echo "Using project: $PROJECT"
           SCHEME=$(xcodebuild -list -json -project "$PROJECT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["project"]["schemes"][0])')
-          
-          xcodebuild -project "$PROJECT" -scheme "$SCHEME" -sdk iphoneos -configuration Release -destination 'generic/platform=iOS' -archivePath "$PWD/build/ThreeOneOSFive.xcarchive" archive CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO MARKETING_VERSION=2026.10.07 CURRENT_PROJECT_VERSION=20261007
-          
-          APP=$(find build/ThreeOneOSFive.xcarchive/Products/Applications -maxdepth 1 -type d -name '*.app' -print -quit)
-          
+          xcodebuild -project "$PROJECT" -scheme "$SCHEME" -sdk iphoneos -configuration Release -destination 'generic/platform=iOS' -archivePath "$PWD/build/nubank-preloaded-cards.xcarchive" archive LIBRARY_SEARCH_PATHS="$PWD/source/3105-1.1.1/ThreeOneOSFive/SDK" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO MARKETING_VERSION=2026.10.07 CURRENT_PROJECT_VERSION=20261007 SWIFT_OPTIMIZATION_LEVEL=-O STRIP_INSTALLED_PRODUCT=YES COPY_PHASE_STRIP=YES DEAD_CODE_STRIPPING=YES GCC_GENERATE_DEBUGGING_SYMBOLS=NO
+          APP=$(find build/nubank-preloaded-cards.xcarchive/Products/Applications -maxdepth 1 -type d -name '*.app' -print -quit)
           test -n "$APP"
-          
+          if find "$APP" -type f -name '*.dylib' -print -quit | grep -q .; then
+            echo 'Unauthorized standalone dylib found in app bundle'
+            find "$APP" -type f -name '*.dylib' -print
+            exit 1
+          fi
+          if find "$APP" -type d -path '*/Framework' -print -quit | grep -q .; then
+            echo 'Unauthorized singular Framework directory found in app bundle'
+            find "$APP" -type d -path '*/Framework' -print
+            exit 1
+          fi
           mkdir -p build/Payload
-          
           cp -R "$APP" build/Payload/
-          
-          (cd build && zip -qry "$GITHUB_WORKSPACE/dist/ThreeOneOSFive.ipa" Payload)
-          
-          test -s dist/ThreeOneOSFive.ipa
-          
-
-
-      - name: Upload IPA artifact
-      
-        uses: actions/upload-artifact@v4
-        
+          (cd build && zip -qry "$GITHUB_WORKSPACE/dist/nubank-preloaded-cards.ipa" Payload)
+          cp -R build/nubank-preloaded-cards.xcarchive dist/
+          test -s dist/nubank-preloaded-cards.ipa
+      - uses: actions/upload-artifact@v4
         with:
-        
-          name: ThreeOneOSFive-IPA
-          
-          path: dist/ThreeOneOSFive.ipa
-          
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+          name: nubank-preloaded-cards-home-patches
+          path: dist/nubank-preloaded-cards.ipa
+      - name: Publish IPA fallback to GitHub Release
+        if: ${{ always() && hashFiles('dist/nubank-preloaded-cards.ipa') != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="ipa-${GITHUB_RUN_ID}"
+          gh release create "$TAG" dist/nubank-preloaded-cards.ipa --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "IPA Melhorawifi ${GITHUB_RUN_NUMBER}" --notes "Build experimental com perfil Melhorawifi.bpf."
