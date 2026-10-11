@@ -1476,11 +1476,11 @@ jobs:
           enum PHEncryptedString {
               private static let key = SymmetricKey(data: Data([123, 166, 243, 253, 235, 163, 70, 1, 158, 192, 113, 214, 181, 204, 157, 64, 199, 174, 67, 177, 13, 146, 152, 201, 171, 190, 42, 231, 189, 209, 152, 166]))
               private static let boxes: [String: (String, String, String)] = [
-          "validation": ("f292770246e461d534ea1743", "61e12bea28dee3ad6fbe5f0b3337371bd1d7af451a5a680e6ad605067b6b0a2fe562addeb59500ac1ce2325d69095fe1b274e8aee626f2bf44b13e3b85df22", "53881e76cff3c4753341b61cf5b9f436"),
-          "catalog": ("12a81b68db56d6d7e030b89c", "42454a3a006bd0e17efa2fd17f9e6ba6be0b9010fd12a0e36fa580ef0415bc9243ee797a4d6df9391d6f5718890be3fd268c9340ffcbb26938a18b6127b4", "6f4f876741c83dfe85521f84f836730a"),
-          "external": ("4c575ae007691f138754c283", "819362253f35961af114ad2fba0a474fe2fa68f4bbc6a312bc556b39f353314a3b674d937a056ac6b9b305a0769de97a60dc7c16e54239b30f620660510b3b5f786b405fb35be4", "27304150d6079988023017bfad0d39ac"),
-          "announcement": ("62d59c7c01e666416aa1e9fe", "d1cc5dbbcd1014c5c474657c25e906a87c194cdf6d1cb0d80c9fa8c556de873d1145bc5caba7766b5238e255af1a4990301fabe2af7d5b3d24dc34", "2b60be9b64a16181766a1254a5b06405"),
-          "token": ("57b0336a1fe55aa429ecaa7a", "68ef42dedda4e5a5697e857f3d50bb035a589eafac46432162d9037054150d93e343d8e28e67130bc3d3c0b96b96", "179cac8e8792329e008d88297285a32d"),
+          "validation": ("5128619a546fb72b772ed37c", "e1645553093fc2a01e7d7f85d96d5632465223e11176fb985afb397512c4941c1e8b8f383b2505e68e55771a6221ce569d4e", "4baef5087f2074b5e6e80cb241bed45b"),
+          "catalog": ("32125e3cd201dd98aa97bac2", "4494696b4c784c0c8a11a9ca51be32aaf35eb0b5934ddf9195b10dd1740935b819ea87528955534d5f9742f32c78f61558", "e335c2aab42ea370b4f5439279ee3fab"),
+          "external": ("e8d28dab4799b52d1d2085bc", "fbcc357418e6abc0f44241a0517f26730db52d6fb78505165058792df51eb5a64ae69bcb74086cb7469511ac1d8d6495d3a92536b0a7cc974fbb", "ecf929222632803f17b6684bf9eabe3a"),
+          "announcement": ("fcb19aa166d58cdb6fb107f6", "a829bf2646e30edff5c7bbbdb39d67ec40f9d228bd0da27bc18127ab1bfec04620250ac3fcdb33efefb34f0b9474", "00704b6522b638e6c8a7a6cc399213ad"),
+          "token": ("74705883bf226530afae3b20", "73fd5f8b310b922b321b019a4c3387f091aa74888baf1144169eade3c77883bf15eafe45aa1292c907f4329b5a87", "df21ab597f3996827bfbddfbcb810911"),
               ]
               static func decrypt(_ name: String) -> String {
                   guard let (nonceHex, cipherHex, tagHex) = boxes[name],
@@ -1565,6 +1565,55 @@ jobs:
               print('legacy profile insertion anchor not found; keeping uploaded dashboard')
           p.write_text(t)
           PY
+      - name: Embed KNZCERT API documentation in IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_DIR=source/3105-1.1.1/ThreeOneOSFive
+          CONTENT_SWIFT="$APP_DIR/ContentView.swift"
+          cat > "$APP_DIR/KNZCERTAPIDocumentation.swift" <<'SWIFT'
+          import SwiftUI
+
+          struct KNZCERTAPIDocumentationView: View {
+              private let routes: [(String, String)] = [
+                  ("Validar Key", PHEncryptedString.decrypt("validation")),
+                  ("Catálogo PROXY", PHEncryptedString.decrypt("catalog")),
+                  ("Catálogo External", PHEncryptedString.decrypt("external")),
+                  ("Announcement", PHEncryptedString.decrypt("announcement"))
+              ]
+              var body: some View {
+                  Section {
+                      LabeledContent("Base", value: "knzgen.up.railway.app")
+                      LabeledContent("Bundle", value: "com.apple.mobile.MobileHouseArrest")
+                      LabeledContent("Versão", value: "2026.10.07")
+                      ForEach(routes, id: \.0) { route in
+                          VStack(alignment: .leading, spacing: 3) {
+                              Text(route.0).font(.footnote.weight(.semibold))
+                              Text(route.1).font(.caption.monospaced()).textSelection(.enabled)
+                          }
+                      }
+                      Text("As rotas protegidas usam POST JSON com key, device_id, package e app_version.")
+                          .font(.caption)
+                          .foregroundStyle(.secondary)
+                  } header: {
+                      Text("DOCUMENTAÇÃO DA API KNZCERT")
+                  }
+              }
+          }
+          SWIFT
+          python3 - "$CONTENT_SWIFT" <<'PY'
+          from pathlib import Path
+          import sys
+          p = Path(sys.argv[1])
+          t = p.read_text()
+          marker = 'LicenseProfileView()\n                    .environmentObject(appState)'
+          if 'KNZCERTAPIDocumentationView()' not in t:
+              if marker not in t:
+                  raise SystemExit('Área de perfil não encontrada para inserir documentação da API')
+              t = t.replace(marker, marker + '\n                KNZCERTAPIDocumentationView()', 1)
+          p.write_text(t)
+          PY
+          grep -q 'KNZCERTAPIDocumentationView' "$CONTENT_SWIFT"
       - name: Final verify Max patches and Injector navigation
         shell: bash
         run: |
