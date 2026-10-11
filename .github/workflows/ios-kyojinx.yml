@@ -1606,11 +1606,11 @@ jobs:
           import sys
           p = Path(sys.argv[1])
           t = p.read_text()
-          marker = 'LicenseProfileView()\n                    .environmentObject(appState)'
           if 'KNZCERTAPIDocumentationView()' not in t:
+              marker = 'List {\n'
               if marker not in t:
-                  raise SystemExit('Área de perfil não encontrada para inserir documentação da API')
-              t = t.replace(marker, marker + '\n                KNZCERTAPIDocumentationView()', 1)
+                  raise SystemExit('Lista principal não encontrada para inserir documentação da API')
+              t = t.replace(marker, marker + '                KNZCERTAPIDocumentationView()\n', 1)
           p.write_text(t)
           PY
           grep -q 'KNZCERTAPIDocumentationView' "$CONTENT_SWIFT"
