@@ -1401,6 +1401,31 @@ jobs:
               if needle in text and 'X-PH-IOS-Token' not in text:
                   path.write_text(text.replace(needle, replacement))
           PY
+      - name: Align client with Railway API contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_DIR=source/3105-1.1.1/ThreeOneOSFive
+          python3 - "$APP_DIR" <<'PY'
+          from pathlib import Path
+          import sys
+          app = Path(sys.argv[1])
+          files = list(app.rglob("*.swift"))
+          for path in files:
+              source = path.read_text()
+              source = source.replace("api-key-external.up.railway.app", "knzgen.up.railway.app")
+              source = source.replace("api-production-182c.up.railway.app", "knzgen.up.railway.app")
+              path.write_text(source)
+          text = "\n".join(path.read_text() for path in files)
+          if "LicenseAPI" not in text or "ExternalPanelView" not in text:
+              raise SystemExit("Cliente Swift da API não foi incluído")
+          if "X-PH-IOS-Token" not in text:
+              raise SystemExit("Header X-PH-IOS-Token não foi injetado")
+          for legacy in ("api-key-external.up.railway.app", "api-production-182c.up.railway.app"):
+              if legacy in text:
+                  raise SystemExit(f"Domínio Railway legado encontrado: {legacy}")
+          print("Contrato API validado: key, device_id, package, app_version e token de cliente")
+          PY
           python3 - "$APP_DIR" <<'PY'
           from pathlib import Path
           import base64, sys
