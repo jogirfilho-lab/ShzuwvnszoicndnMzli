@@ -1571,7 +1571,7 @@ jobs:
           set -euo pipefail
           APP_DIR=source/3105-1.1.1/ThreeOneOSFive
           CONTENT_SWIFT="$APP_DIR/ContentView.swift"
-          cat > "$APP_DIR/KNZCERTAPIDocumentation.swift" <<'SWIFT'
+          cat >> "$CONTENT_SWIFT" <<'SWIFT'
           import SwiftUI
 
           struct KNZCERTAPIDocumentationView: View {
