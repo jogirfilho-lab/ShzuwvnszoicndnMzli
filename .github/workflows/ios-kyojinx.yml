@@ -64,7 +64,6 @@ jobs:
           nav.write_text(n.replace(old, "return [.home, .patches, .external].filter(isVisible)", 1))
           PY
       - name: Add API login gate
-        if: ${{ false }}
         shell: bash
         run: |
           set -euo pipefail
@@ -74,7 +73,7 @@ jobs:
           from pathlib import Path
           p = Path(sys.argv[1])
           t = p.read_text()
-          addition = base64.b64decode(sys.argv[2] + "=" * (-len(sys.argv[2]) % 4)).decode()
+          addition = base64.b64decode(sys.argv[2].encode().replace(b"\n", b"") + b"===").decode()
           addition = addition.replace("private static var storedKey", "static var storedKey", 1)
           t = t.replace('import UIKit\n', 'import UIKit\nimport Security\n', 1)
           t = t.replace('    @State private var showOnboarding = false\n', '    @State private var showOnboarding = false\n    @State private var isLicensed = false\n', 1)
