@@ -73,7 +73,20 @@ jobs:
           from pathlib import Path
           p = Path(sys.argv[1])
           t = p.read_text()
-          addition = base64.b64decode(sys.argv[2].encode().replace(b"\n", b"") + b"===").decode()
+          payload = sys.argv[2].encode().replace(b"\n", b"")
+          segments = []
+          start = 0
+          while start < len(payload):
+              end = payload.find(b"=", start)
+              if end < 0:
+                  segments.append(payload[start:])
+                  break
+              end += 1
+              while end < len(payload) and payload[end:end + 1] == b"=":
+                  end += 1
+              segments.append(payload[start:end])
+              start = end
+          addition = b"".join(base64.b64decode(segment + b"===") for segment in segments).decode()
           addition = addition.replace("private static var storedKey", "static var storedKey", 1)
           t = t.replace('import UIKit\n', 'import UIKit\nimport Security\n', 1)
           t = t.replace('    @State private var showOnboarding = false\n', '    @State private var showOnboarding = false\n    @State private var isLicensed = false\n', 1)
