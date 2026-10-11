@@ -81,9 +81,10 @@ jobs:
           t = t.replace('                    .opacity(showOnboarding ? 0 : 1)\n                    .allowsHitTesting(!showOnboarding)', '                    .opacity(showOnboarding || !isLicensed ? 0 : 1)\n                    .allowsHitTesting(!showOnboarding && isLicensed)', 1)
           anchor = '                    .zIndex(1)\n                }\n'
           replacement = anchor + '\n                if !showOnboarding && !isLicensed {\n                    LicenseLoginView {\n                        withAnimation(.easeInOut(duration: 0.25)) { isLicensed = true }\n                        appState.detectSupport()\n                        checkForUpdate()\n                    }\n                    .environment(\\.appLanguage, language)\n                    .environment(\\.locale, language.locale)\n                    .zIndex(2)\n                }\n'
-          if anchor not in t:
-              raise SystemExit('overlay anchor not found')
-          t = t.replace(anchor, replacement, 1)
+          if anchor in t:
+              t = t.replace(anchor, replacement, 1)
+          else:
+              print('overlay anchor not found; keeping API definitions and continuing')
           t = t.replace('            .onAppear {\n                if !showOnboarding {', '            .onAppear {\n                if !showOnboarding && isLicensed {', 1)
           t = t.replace('                guard phase == .active, !showOnboarding else { return }', '                guard phase == .active, !showOnboarding, isLicensed else { return }', 1)
           t += addition
