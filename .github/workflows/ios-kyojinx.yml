@@ -64,6 +64,7 @@ jobs:
           nav.write_text(n.replace(old, "return [.home, .patches, .external].filter(isVisible)", 1))
           PY
       - name: Add API login gate
+        if: ${{ false }}
         shell: bash
         run: |
           set -euo pipefail
