@@ -164,7 +164,7 @@ jobs:
           replacement = r"""enum AppUpdateChecker {
               static let dismissedVersionKey = "update.dismissedVersion"
               struct Offer: Identifiable { let id = UUID(); let version: String; let url: URL }
-              static let apiURL = URL(string: String(data: Data(base64Encoded: "aHR0cHM6Ly9rbnpnZW4udXAucmFpbHdheS5hcHA=L2FwaS9hbm5vdW5jZW1lbnQ=")!, encoding: .utf8)!)!
+              static let apiURL = URL(string: String(data: Data(base64Encoded: "aHR0cHM6Ly9rbnpnZW4udXAucmFpbHdheS5hcHAvYXBpL2Fubm91bmNlbWVudA==")!, encoding: .utf8)!)!
               static func dismiss(version: String) { UserDefaults.standard.set(version, forKey: dismissedVersionKey) }
               static func check() async -> Offer? {
                   do {
@@ -581,8 +581,8 @@ jobs:
           }
           
           private enum RemotePatchAPI {
-              private static let catalogURL = URL(string: String(data: Data(base64Encoded: "aHR0cHM6Ly9rbnpnZW4udXAucmFpbHdheS5hcHA=L2FwaS9wYXRjaGVzL2NhdGFsb2c=")!, encoding: .utf8)!)!
-              private static let announcementURL = URL(string: String(data: Data(base64Encoded: "aHR0cHM6Ly9rbnpnZW4udXAucmFpbHdheS5hcHA=L2FwaS9hbm5vdW5jZW1lbnQ=")!, encoding: .utf8)!)!
+              private static let catalogURL = URL(string: String(data: Data(base64Encoded: "aHR0cHM6Ly9rbnpnZW4udXAucmFpbHdheS5hcHAvYXBpL3BhdGNoZXMvY2F0YWxvZw==")!, encoding: .utf8)!)!
+              private static let announcementURL = URL(string: String(data: Data(base64Encoded: "aHR0cHM6Ly9rbnpnZW4udXAucmFpbHdheS5hcHAvYXBpL2Fubm91bmNlbWVudA==")!, encoding: .utf8)!)!
               static func cachedFile(named name: String) -> URL? {
                   let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("RemotePatches", isDirectory: true)
                   let url = dir.appendingPathComponent(name)
@@ -1406,9 +1406,9 @@ jobs:
           import base64, sys
           app = Path(sys.argv[1])
           urls = {
-              'https://api-key-external.up.railway.app/api/announcement': 'aHR0cHM6Ly9rbnpnZW4udXAucmFpbHdheS5hcHA=L2FwaS9hbm5vdW5jZW1lbnQ=',
-              'https://api-key-external.up.railway.app/api/patches/catalog': 'aHR0cHM6Ly9rbnpnZW4udXAucmFpbHdheS5hcHA=L2FwaS9wYXRjaGVzL2NhdGFsb2c=',
-              'https://api-key-external.up.railway.app/api/patches/external/catalog': 'aHR0cHM6Ly9rbnpnZW4udXAucmFpbHdheS5hcHA=L2FwaS9wYXRjaGVzL2V4dGVybmFsL2NhdGFsb2c='
+              'https://api-key-external.up.railway.app/api/announcement': 'aHR0cHM6Ly9rbnpnZW4udXAucmFpbHdheS5hcHAvYXBpL2Fubm91bmNlbWVudA==',
+              'https://api-key-external.up.railway.app/api/patches/catalog': 'aHR0cHM6Ly9rbnpnZW4udXAucmFpbHdheS5hcHAvYXBpL3BhdGNoZXMvY2F0YWxvZw==',
+              'https://api-key-external.up.railway.app/api/patches/external/catalog': 'aHR0cHM6Ly9rbnpnZW4udXAucmFpbHdheS5hcHAvYXBpL3BhdGNoZXMvZXh0ZXJuYWwvY2F0YWxvZw=='
           }
           for path in app.rglob('*.swift'):
               text = path.read_text()
@@ -1503,9 +1503,9 @@ jobs:
           }
           oldToken = 'String(data: Data(base64Encoded: "cGhfY1BQSFhxMGdhZ2k5Znk4VE4zWHlPSnVEcHcwWGJOa194RkJmT2x4Nk1taw==")!, encoding: .utf8)!'
           legacy = {
-              'String(data: Data(base64Encoded: "aHR0cHM6Ly9rbnpnZW4udXAucmFpbHdheS5hcHA=L2FwaS9wYXRjaGVzL2NhdGFsb2c=")!, encoding: .utf8)!': 'PHEncryptedString.decrypt("catalog")',
-              'String(data: Data(base64Encoded: "aHR0cHM6Ly9rbnpnZW4udXAucmFpbHdheS5hcHA=L2FwaS9wYXRjaGVzL2V4dGVybmFsL2NhdGFsb2c=")!, encoding: .utf8)!': 'PHEncryptedString.decrypt("external")',
-              'String(data: Data(base64Encoded: "aHR0cHM6Ly9rbnpnZW4udXAucmFpbHdheS5hcHA=L2FwaS9hbm5vdW5jZW1lbnQ=")!, encoding: .utf8)!': 'PHEncryptedString.decrypt("announcement")',
+              'String(data: Data(base64Encoded: "aHR0cHM6Ly9rbnpnZW4udXAucmFpbHdheS5hcHAvYXBpL3BhdGNoZXMvY2F0YWxvZw==")!, encoding: .utf8)!': 'PHEncryptedString.decrypt("catalog")',
+              'String(data: Data(base64Encoded: "aHR0cHM6Ly9rbnpnZW4udXAucmFpbHdheS5hcHAvYXBpL3BhdGNoZXMvZXh0ZXJuYWwvY2F0YWxvZw==")!, encoding: .utf8)!': 'PHEncryptedString.decrypt("external")',
+              'String(data: Data(base64Encoded: "aHR0cHM6Ly9rbnpnZW4udXAucmFpbHdheS5hcHAvYXBpL2Fubm91bmNlbWVudA==")!, encoding: .utf8)!': 'PHEncryptedString.decrypt("announcement")',
           }
           for path in app.rglob("*.swift"):
               text = path.read_text()
