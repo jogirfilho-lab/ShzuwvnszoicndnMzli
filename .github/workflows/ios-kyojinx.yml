@@ -1232,7 +1232,7 @@ jobs:
           from pathlib import Path
           p=Path(sys.argv[1])
           t=p.read_text()
-          definition=base64.b64decode(sys.argv[2]).decode()
+          definition=base64.b64decode(sys.argv[2] + "=" * (-len(sys.argv[2]) % 4)).decode()
           if 'private struct InjectorTabIcon: View' not in t:
               t=t.replace('private struct CompactTabLabel: View {', definition+'private struct CompactTabLabel: View {', 1)
           t=t.replace('if let image = UIImage(', 'if title == "Injector" { InjectorTabIcon() } else if let image = UIImage(', 1)
@@ -1262,7 +1262,7 @@ jobs:
           from pathlib import Path
           content = Path(sys.argv[1])
           text = content.read_text()
-          definition = base64.b64decode(sys.argv[2]).decode()
+          definition = base64.b64decode(sys.argv[2] + "=" * (-len(sys.argv[2]) % 4)).decode()
           start = text.find("private struct CompactTabLabel: View {")
           end = text.find("private extension AppSection", start)
           if start < 0 or end < 0: raise SystemExit("CompactTabLabel boundaries not found")
