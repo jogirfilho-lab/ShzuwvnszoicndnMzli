@@ -265,20 +265,7 @@ jobs:
           
           private let patchCatalog: [PreloadedPatch] = []
           
-          private let freeFirePatchCatalog: [PreloadedPatch] = [
-              PreloadedPatch(id: "free-fire-0", title: "BALA MAGICA - ANTENA", fileName: "BALA MAGICA - ANTENA.3105", replacementCount: 1),
-              PreloadedPatch(id: "free-fire-1", title: "HS ALTO + PESCOCÇO", fileName: "HS ALTO + PESCOÇO .3105", replacementCount: 1),
-              PreloadedPatch(id: "free-fire-2", title: "HS ALTO", fileName: "HS ALTO.3105", replacementCount: 1),
-              PreloadedPatch(id: "free-fire-3", title: "HS BARRIGA V2", fileName: "HS BARRIGA V2.3105", replacementCount: 1),
-              PreloadedPatch(id: "free-fire-4", title: "HS CABECÇAO - ANTENA AVATAR", fileName: "HS CABEÇAO - ANTENA AVATAR.3105", replacementCount: 1),
-              PreloadedPatch(id: "free-fire-5", title: "HS IBIGO- ANTENA AVATAR", fileName: "HS IBIGO- ANTENA AVATAR.3105", replacementCount: 1),
-              PreloadedPatch(id: "free-fire-6", title: "HS PEITO CABECA BUGADA", fileName: "HS PEITO CABECA BUGADA.3105", replacementCount: 1),
-              PreloadedPatch(id: "free-fire-7", title: "HS PEITO LITE - ANTENA", fileName: "HS PEITO LITE - ANTENA.3105", replacementCount: 1),
-              PreloadedPatch(id: "free-fire-8", title: "HS PESCOCÇO  LITE - ANTENA", fileName: "HS PESCOÇO  LITE - ANTENA.3105", replacementCount: 1),
-              PreloadedPatch(id: "free-fire-9", title: "HS PESCOCÇO - ANTENA", fileName: "HS PESCOÇO - ANTENA.3105", replacementCount: 1),
-              PreloadedPatch(id: "free-fire-10", title: "HS PESCOCÇO MELHORADO", fileName: "HS PESCOÇO MELHORADO.3105", replacementCount: 1),
-              PreloadedPatch(id: "free-fire-11", title: "Holograma verde", fileName: "Holograma verde .3105", replacementCount: 1),
-          ]
+          private let freeFirePatchCatalog: [PreloadedPatch] = []
 
           private let preloadedGames: [PreloadedGame] = [
               PreloadedGame(id: "free-fire", title: "FREE FIRE", bundleID: "com.dts.freefireth", patches: freeFirePatchCatalog),
