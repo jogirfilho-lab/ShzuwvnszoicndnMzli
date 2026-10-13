@@ -1885,12 +1885,22 @@ jobs:
               t = t.replace('.foregroundColor(.black)', '.foregroundColor(.white)')
               t = t.replace('.tint(.green)', f'.tint({gold})')
               t = t.replace('.tint(.orange)', f'.tint({gold})')
+              # ExternalPanelView is appended into PatchProjectsView.swift and
+              # is the screen shown after tapping External. Override its actual
+              # computed palette; changing only labels does not change that UI.
+              t = t.replace('private var accent: Color { theme.color }', f'private var accent: Color {{ {gold} }}')
+              t = t.replace('private var pageBackground: Color { lightMode ? Color(red: 0.93, green: 0.94, blue: 0.97) : Color(red: 0.025, green: 0.027, blue: 0.035) }', 'private var pageBackground: Color { lightMode ? Color(red: 0.12, green: 0.10, blue: 0.07) : Color(red: 0.012, green: 0.014, blue: 0.018) }')
+              t = t.replace('private var panelBackground: Color { lightMode ? Color.white.opacity(0.90) : Color.white.opacity(0.075) }', 'private var panelBackground: Color { lightMode ? Color.white.opacity(0.10) : Color.white.opacity(0.055) }')
+              t = t.replace('private var cardBackground: Color { lightMode ? Color.white : Color.white.opacity(0.065) }', 'private var cardBackground: Color { lightMode ? Color.white.opacity(0.14) : Color.white.opacity(0.075) }')
+              t = t.replace('Text(categoryTitle).font(.system(size: 16, weight: .bold, design: .rounded))', 'Text("EXTERNAL").font(.system(size: 23, weight: .black, design: .rounded))')
               # Gold borders around cards/buttons without changing their actions.
               t = t.replace('stroke(Color.gray, lineWidth: 1)', f'stroke({gold}.opacity(0.55), lineWidth: 1)')
               t = t.replace('stroke(Color.white.opacity(0.10), lineWidth: 1)', f'stroke({gold}.opacity(0.24), lineWidth: 1)')
               p.write_text(t)
           PY
-          grep -R -n 'EXTERNAL ACCESS\|Color(red: 0.82, green: 0.63, blue: 0.25)' source/3105-1.1.1/ThreeOneOSFive --include='*.swift'
+          grep -R -n 'EXTERNAL ACCESS\|private var accent: Color { Color(red: 0.82, green: 0.63, blue: 0.25) }\|Text("EXTERNAL")' source/3105-1.1.1/ThreeOneOSFive --include='*.swift'
+          test "$(grep -R -l 'private var accent: Color { Color(red: 0.82, green: 0.63, blue: 0.25) }' source/3105-1.1.1/ThreeOneOSFive --include='*.swift' | wc -l)" -ge 1
+          ! grep -R -n 'private var accent: Color { theme.color }' source/3105-1.1.1/ThreeOneOSFive --include='*.swift'
       - name: Build original archive and IPA
         shell: bash
         run: |
