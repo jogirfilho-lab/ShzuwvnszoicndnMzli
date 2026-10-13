@@ -349,7 +349,7 @@ jobs:
           
               private var header: some View {
                   ZStack {
-                      Text("FUNÇÕES EXTERNAL")
+                      Text("EXTERNAL KNZAC")
                           .font(.system(size: 20, weight: .bold, design: .rounded))
                           .foregroundStyle(fg)
                           .frame(maxWidth: .infinity)
@@ -1853,6 +1853,44 @@ jobs:
           t, count = re.subn(r'\s*private var gameCards: some View \{.*?\s*private var featureList', '\n' + cards + '              private var featureList', t, count=1, flags=re.S)
           p.write_text(t)
           PY
+      - name: Apply EXTERNAL KNZAC visual theme
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          gold = 'Color(red: 0.82, green: 0.63, blue: 0.25)'
+          gold_soft = 'Color(red: 0.82, green: 0.63, blue: 0.25).opacity(0.18)'
+          root = Path('source/3105-1.1.1/ThreeOneOSFive')
+          files = [root / 'App.swift', root / 'ContentView.swift', root / 'views' / 'PatchProjectsView.swift']
+          for p in files:
+              if not p.exists():
+                  continue
+              t = p.read_text()
+              # Brand and copy from the supplied visual reference.
+              t = t.replace('Text("Acesso ao aplicativo")', 'Text("EXTERNAL ACCESS")')
+              t = t.replace('Text("Digite sua chave para continuar")', 'Text("EXTERNAL ACCESS • iOS VERSION")')
+              t = t.replace('Text("FUNÇÕES EXTERNAL")', 'Text("EXTERNAL")')
+              t = t.replace('Text("PROXY CHEATS")', 'Text("EXTERNAL")')
+              t = t.replace('Text("PROXY")', 'Text("EXTERNAL")')
+              # Keep the reference palette: black background, gold action/accent.
+              t = t.replace('Color.green', gold)
+              t = t.replace('Color.orange', gold)
+              t = t.replace('Color(.systemGray6)', 'Color.white.opacity(0.08)')
+              t = t.replace('Color.white.ignoresSafeArea()', '(LinearGradient(colors: [Color.black, Color(red: 0.035, green: 0.04, blue: 0.05)], startPoint: .top, endPoint: .bottom)).ignoresSafeArea()')
+              t = t.replace('.background(Color.gray)', '.background(Color.white.opacity(0.10))')
+              t = t.replace('.background(Color.black)', '.background(Color.black.opacity(0.72))')
+              t = t.replace('.foregroundStyle(Color.black)', '.foregroundStyle(Color.white)')
+              t = t.replace('.foregroundColor(.black)', '.foregroundColor(.white)')
+              t = t.replace('.tint(.green)', f'.tint({gold})')
+              t = t.replace('.tint(.orange)', f'.tint({gold})')
+              # Gold borders around cards/buttons without changing their actions.
+              t = t.replace('stroke(Color.gray, lineWidth: 1)', f'stroke({gold}.opacity(0.55), lineWidth: 1)')
+              t = t.replace('stroke(Color.white.opacity(0.10), lineWidth: 1)', f'stroke({gold}.opacity(0.24), lineWidth: 1)')
+              p.write_text(t)
+          PY
+          grep -R -n 'EXTERNAL ACCESS\|Color(red: 0.82, green: 0.63, blue: 0.25)' source/3105-1.1.1/ThreeOneOSFive --include='*.swift'
       - name: Build original archive and IPA
         shell: bash
         run: |
