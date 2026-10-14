@@ -1958,11 +1958,13 @@ jobs:
           nav.write_text(n)
           c = content.read_text()
           if 'sectionContent(.textures)' not in c:
-              old = '              sectionContent(.external)\n                  .tabItem { CompactTabLabel(title: "External", systemImage: "gamecontroller.fill") }\n                  .tag(AppSection.external.rawValue)\n'
-              new = old + '              sectionContent(.textures)\n                  .tabItem { CompactTabLabel(title: "Texturas", systemImage: "square.3.layers.3d.fill") }\n                  .tag(AppSection.textures.rawValue)\n'
-              if old not in c:
+              lines = c.splitlines(True)
+              start = next((i for i, line in enumerate(lines) if 'sectionContent(.external)' in line), -1)
+              end = next((i for i in range(start, len(lines)) if 'AppSection.external.rawValue' in lines[i]), -1) if start >= 0 else -1
+              if start < 0 or end < 0:
                   raise SystemExit('compact External tab not found')
-              c = c.replace(old, new, 1)
+              addition = '              sectionContent(.textures)\n                  .tabItem { CompactTabLabel(title: "Texturas", systemImage: "square.3.layers.3d.fill") }\n                  .tag(AppSection.textures.rawValue)\n'
+              c = ''.join(lines[:end + 1]) + addition + ''.join(lines[end + 1:])
           if 'case .textures:' not in c:
               old = '        case .external:\n            ExternalPanelView()'
               new = old + '\n        case .textures:\n            ExternalPanelView(initialCategory: "Texturas")'
