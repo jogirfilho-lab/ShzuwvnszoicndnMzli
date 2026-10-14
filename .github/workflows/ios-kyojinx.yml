@@ -1901,6 +1901,45 @@ jobs:
           grep -R -n 'EXTERNAL ACCESS\|private var accent: Color { Color(red: 0.82, green: 0.63, blue: 0.25) }\|Text("EXTERNAL")' source/3105-1.1.1/ThreeOneOSFive --include='*.swift'
           test "$(grep -R -l 'private var accent: Color { Color(red: 0.82, green: 0.63, blue: 0.25) }' source/3105-1.1.1/ThreeOneOSFive --include='*.swift' | wc -l)" -ge 1
           ! grep -R -n 'private var accent: Color { theme.color }' source/3105-1.1.1/ThreeOneOSFive --include='*.swift'
+      - name: Add Texturas tab using authenticated external catalog
+        shell: bash
+        run: |
+          set -euo pipefail
+          PATCH_SWIFT=source/3105-1.1.1/ThreeOneOSFive/views/PatchProjectsView.swift
+          python3 - "$PATCH_SWIFT" <<'PY'
+          from pathlib import Path
+          import re, sys
+          p = Path(sys.argv[1])
+          t = p.read_text()
+          required = 'struct ExternalPanelView: View {'
+          if required not in t:
+              raise SystemExit('ExternalPanelView não encontrado; Texturas não será injetada')
+          t, count = t.replace('case tools = "Extras/Ferramentas"\n        case profile', 'case tools = "Extras/Ferramentas"\n        case textures = "Texturas"\n        case profile', 1), 0
+          # The replacement above is deliberately checked below; no duplicate case is allowed.
+          if 'case textures = "Texturas"' not in t:
+              raise SystemExit('categoria Texturas não foi adicionada')
+          t = t.replace('case .tools: return "wrench.and.screwdriver.fill"\n            case .profile:', 'case .tools: return "wrench.and.screwdriver.fill"\n            case .textures: return "square.3.layers.3d.fill"\n            case .profile:', 1)
+          t = t.replace('case .tools: return ["GERAL", "OUTROS", "EXTRAS/FERRAMENTAS", "EXTRAS", "FERRAMENTAS", "TOOLS"]\n            case .profile:', 'case .tools: return ["GERAL", "OUTROS", "EXTRAS/FERRAMENTAS", "EXTRAS", "FERRAMENTAS", "TOOLS"]\n            case .textures: return ["TEXTURAS", "TEXTURE", "TEXTURES", "SKINS"]\n            case .profile:', 1)
+          t = t.replace('case .tools: return "Extras/Tools"\n        case .profile:', 'case .tools: return "Extras/Tools"\n        case .textures: return "Textures"\n        case .profile:', 1)
+          t = t.replace('Image(systemName: category.icon).font(.system(size: 16, weight: .semibold)).foregroundStyle(accent).frame(width: 28, height: 28)', 'Image(systemName: category == .textures ? "square.3.layers.3d.fill" : category.icon).font(.system(size: 16, weight: .semibold)).foregroundStyle(accent).frame(width: 28, height: 28)', 1)
+          p.write_text(t)
+          # This tab intentionally reuses the existing authenticated catalog and
+          # .3105 verification/apply path; no fake preview URL or unsupported action is added.
+          checks = [
+              'case textures = "Texturas"',
+              'case .textures: return ["TEXTURAS", "TEXTURE", "TEXTURES", "SKINS"]',
+              'square.3.layers.3d.fill',
+              'ExternalPanelView'
+          ]
+          final = p.read_text()
+          missing = [item for item in checks if item not in final]
+          if missing:
+              raise SystemExit('Texturas incompleta: ' + ', '.join(missing))
+          print('Texturas adicionada: catálogo autenticado, filtragem por interfaceTab e aplicação .3105 reutilizada')
+          PY
+          grep -q 'case textures = "Texturas"' "$PATCH_SWIFT"
+          grep -q 'TEXTURAS' "$PATCH_SWIFT"
+          grep -q 'square.3.layers.3d.fill' "$PATCH_SWIFT"
       - name: Build original archive and IPA
         shell: bash
         run: |
