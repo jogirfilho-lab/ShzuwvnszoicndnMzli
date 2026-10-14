@@ -1940,6 +1940,56 @@ jobs:
           grep -q 'case textures = "Texturas"' "$PATCH_SWIFT"
           grep -q 'TEXTURAS' "$PATCH_SWIFT"
           grep -q 'square.3.layers.3d.fill' "$PATCH_SWIFT"
+      - name: Expose Texturas as main navigation tab
+        shell: bash
+        run: |
+          set -euo pipefail
+          NAV=source/3105-1.1.1/ThreeOneOSFive/helpers/AppTabNavigationState.swift
+          CONTENT=source/3105-1.1.1/ThreeOneOSFive/ContentView.swift
+          PANEL=source/3105-1.1.1/ThreeOneOSFive/views/PatchProjectsView.swift
+          python3 - "$NAV" "$CONTENT" "$PANEL" <<'PY'
+          from pathlib import Path
+          import sys
+          nav, content, panel = map(Path, sys.argv[1:])
+          n = nav.read_text()
+          if '    case textures\n' not in n:
+              n = n.replace('    case external\n', '    case external\n    case textures\n', 1)
+          n = n.replace('[.patches, .external].filter(isVisible)', '[.patches, .external, .textures].filter(isVisible)')
+          nav.write_text(n)
+          c = content.read_text()
+          if 'sectionContent(.textures)' not in c:
+              old = '              sectionContent(.external)\n                  .tabItem { CompactTabLabel(title: "External", systemImage: "gamecontroller.fill") }\n                  .tag(AppSection.external.rawValue)\n'
+              new = old + '              sectionContent(.textures)\n                  .tabItem { CompactTabLabel(title: "Texturas", systemImage: "square.3.layers.3d.fill") }\n                  .tag(AppSection.textures.rawValue)\n'
+              if old not in c:
+                  raise SystemExit('compact External tab not found')
+              c = c.replace(old, new, 1)
+          if 'case .textures:' not in c:
+              old = '        case .external:\n            ExternalPanelView()'
+              new = old + '\n        case .textures:\n            ExternalPanelView(initialCategory: "Texturas")'
+              if old not in c:
+                  raise SystemExit('External section switch not found')
+              c = c.replace(old, new, 1)
+          c = c.replace('[.patches, .external].filter(isVisible)', '[.patches, .external, .textures].filter(isVisible)')
+          c = c.replace('ForEach([AppSection.patches, .external])', 'ForEach([AppSection.patches, .external, .textures])')
+          content.write_text(c)
+          p = panel.read_text()
+          if 'init(initialCategory: String = "Funções")' not in p:
+              marker = '    @Environment(\\.dismiss) private var dismiss\n'
+              init_code = '    init(initialCategory: String = "Funções") {\n        _category = State(initialValue: Category(rawValue: initialCategory) ?? .functions)\n    }\n\n'
+              if marker not in p:
+                  raise SystemExit('ExternalPanelView init marker not found')
+              p = p.replace(marker, init_code + marker, 1)
+          panel.write_text(p)
+          combined = nav.read_text() + content.read_text() + panel.read_text()
+          for item in ('case textures', 'sectionContent(.textures)', 'AppSection.textures.rawValue', 'init(initialCategory: String = "Funções")'):
+              if item not in combined:
+                  raise SystemExit('missing main Texturas marker: ' + item)
+          print('main Texturas tab added')
+          PY
+          grep -q 'case textures' "$NAV"
+          grep -q 'sectionContent(.textures)' "$CONTENT"
+          grep -q 'AppSection.textures.rawValue' "$CONTENT"
+          grep -q 'init(initialCategory: String = "Funções")' "$PANEL"
       - name: Build original archive and IPA
         shell: bash
         run: |
