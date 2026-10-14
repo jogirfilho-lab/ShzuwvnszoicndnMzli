@@ -1973,6 +1973,8 @@ jobs:
               c = c.replace(old, new, 1)
           c = c.replace('[.patches, .external].filter(isVisible)', '[.patches, .external, .textures].filter(isVisible)')
           c = c.replace('ForEach([AppSection.patches, .external])', 'ForEach([AppSection.patches, .external, .textures])')
+          c = c.replace('case .external: return "External"\n', 'case .external: return "External"\n        case .textures: return "Texturas"\n', 1)
+          c = c.replace('case .external: return "gamecontroller.fill"\n', 'case .external: return "gamecontroller.fill"\n        case .textures: return "square.3.layers.3d.fill"\n', 1)
           content.write_text(c)
           p = panel.read_text()
           if 'init(initialCategory: String = "Funções")' not in p:
