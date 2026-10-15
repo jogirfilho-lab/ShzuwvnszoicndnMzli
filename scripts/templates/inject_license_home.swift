@@ -60,7 +60,7 @@ struct InjectLicenseHomeView: View {
                         .frame(width: 176, height: 116)
                         .accessibilityLabel("inject chz")
                         .frame(maxWidth: .infinity)
-                        .padding(.top, 12).padding(.bottom, 14)
+                        .padding(.top, 32).padding(.bottom, 14)
                     TimelineView(.periodic(from: .now, by: 1)) { clock in
                         VStack(alignment: .leading, spacing: 18) {
                             timeCard(at: clock.date)
