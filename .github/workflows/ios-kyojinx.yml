@@ -33,9 +33,11 @@ jobs:
           info.write_text(t)
           p = project.read_text()
           p = p.replace('INFOPLIST_KEY_CFBundleDisplayName = 3105;', 'INFOPLIST_KEY_CFBundleDisplayName = "EXTERNAL CHZ";')
+          p = p.replace('INFOPLIST_KEY_CFBundleDisplayName = "EXTERNAL CHZ";', 'INFOPLIST_KEY_CFBundleDisplayName = "EXTERNAL CHZ";\n\t\t\t\tINFOPLIST_KEY_CFBundleName = "EXTERNAL CHZ";')
           project.write_text(p)
           assert '<string>EXTERNAL CHZ</string>' in info.read_text()
           assert 'INFOPLIST_KEY_CFBundleDisplayName = "EXTERNAL CHZ";' in project.read_text()
+          assert 'INFOPLIST_KEY_CFBundleName = "EXTERNAL CHZ";' in project.read_text()
           PY2
           grep -q 'CFBundleDisplayName</key>' "$INFO"
           grep -q 'EXTERNAL CHZ' "$INFO"
