@@ -2172,6 +2172,14 @@ jobs:
           python3 /tmp/move_external_menu.py "$PANEL"
           grep -q 'private var topCategoryBar' "$PANEL"
           ! grep -q 'private var sidebar' "$PANEL"
+      - name: Apply supplied video reference design
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_video_reference.py source/3105-1.1.1/ThreeOneOSFive
+          grep -q 'videoSelectionHeader' source/3105-1.1.1/ThreeOneOSFive/views/PatchProjectsView.swift
+          grep -q 'videoLogPanel' source/3105-1.1.1/ThreeOneOSFive/views/PatchProjectsView.swift
+          grep -q 'sectionContent(.home)' source/3105-1.1.1/ThreeOneOSFive/ContentView.swift
       - name: Build original archive and IPA
         shell: bash
         run: |
