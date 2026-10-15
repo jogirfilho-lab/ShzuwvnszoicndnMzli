@@ -1947,6 +1947,37 @@ jobs:
           grep -q 'ExternalCHZLogo' source/3105-1.1.1/ThreeOneOSFive/ContentView.swift
           test -s source/3105-1.1.1/ThreeOneOSFive/Assets.xcassets/ExternalCHZLogo.imageset/ExternalCHZLogo.jpg
           grep -R -q 'tema somente preto/vermelho' /dev/null 2>/dev/null || true
+      - name: Personalize PROXY as CHZ CHEATS reference
+        shell: bash
+        run: |
+          set -euo pipefail
+          PATCH=source/3105-1.1.1/ThreeOneOSFive/views/PatchProjectsView.swift
+          CONTENT=source/3105-1.1.1/ThreeOneOSFive/ContentView.swift
+          NAV=source/3105-1.1.1/ThreeOneOSFive/helpers/AppTabNavigationState.swift
+          python3 - "$PATCH" "$CONTENT" "$NAV" <<'PY2'
+          from pathlib import Path
+          import re, sys
+          patch, content, nav = map(Path, sys.argv[1:])
+          t = patch.read_text()
+          # The reference is the light PROXY screen; do not let an old AppStorage value restore the old dark screen.
+          t = t.replace('@AppStorage("patchesDarkMode") private var darkMode = true', '@State private var darkMode = false')
+          start = t.find('private var header: some View')
+          end = t.find('private func sectionTitle', start)
+          if start >= 0 and end > start:
+              block = t[start:end]
+              block = block.replace('Text("EXTERNAL")', 'Text("CHZ")', 1)
+              t = t[:start] + block + t[end:]
+          # Make the selected controls use the same red as the supplied CHZ artwork.
+          t = t.replace('private var accent: Color { Color(red: 0.92, green: 0.06, blue: 0.10) }', 'private var accent: Color { Color(red: 0.92, green: 0.06, blue: 0.10) }')
+          patch.write_text(t)
+          for p in (content, nav):
+              s = p.read_text().replace('CompactTabLabel(title: "PROXY"', 'CompactTabLabel(title: "CHZ CHEATS"')
+              p.write_text(s)
+          assert 'private var darkMode = false' in patch.read_text()
+          assert 'CompactTabLabel(title: "CHZ CHEATS"' in content.read_text()
+          PY2
+          grep -q 'Text("CHZ")' "$PATCH"
+          grep -q 'CompactTabLabel(title: "CHZ CHEATS"' "$CONTENT"
       - name: Add Texturas tab using authenticated external catalog
         shell: bash
         run: |
