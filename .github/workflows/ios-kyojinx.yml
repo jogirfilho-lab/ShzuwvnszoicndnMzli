@@ -1978,6 +1978,32 @@ jobs:
           PY2
           grep -q 'Text("CHZ")' "$PATCH"
           grep -q 'CompactTabLabel(title: "CHZ CHEATS"' "$CONTENT"
+      - name: Apply CHZ CHEATS red and black palette
+        shell: bash
+        run: |
+          set -euo pipefail
+          PATCH=source/3105-1.1.1/ThreeOneOSFive/views/PatchProjectsView.swift
+          python3 - "$PATCH" <<'PY2'
+          from pathlib import Path
+          import sys
+          p = Path(sys.argv[1])
+          t = p.read_text()
+          t = t.replace('@State private var darkMode = false', '@State private var darkMode = true')
+          t = t.replace('Text("EXTERNAL KNZAC")', 'Text("CHZ CHEATS")')
+          start = t.find('private var header: some View')
+          end = t.find('private func sectionTitle', start)
+          if start >= 0 and end > start:
+              block = t[start:end].replace('Text("EXTERNAL")', 'Text("CHZ CHEATS")', 1)
+              t = t[:start] + block + t[end:]
+          t = t.replace('Color(red: 0.035, green: 0.045, blue: 0.055)', 'Color(red: 0.22, green: 0.008, blue: 0.018)')
+          t = t.replace('darkMode ? Color.white.opacity(0.10) : .white', 'darkMode ? Color.black.opacity(0.82) : .white')
+          t = t.replace('selectedGameID == game.id ? fg.opacity(0.8) : fg.opacity(0.12)', 'selectedGameID == game.id ? Color(red: 0.92, green: 0.06, blue: 0.10) : Color.white.opacity(0.16)')
+          p.write_text(t)
+          assert 'Text("CHZ CHEATS")' in p.read_text()
+          assert '@State private var darkMode = true' in p.read_text()
+          PY2
+          grep -q 'CHZ CHEATS' "$PATCH"
+          grep -q 'darkMode = true' "$PATCH"
       - name: Add Texturas tab using authenticated external catalog
         shell: bash
         run: |
