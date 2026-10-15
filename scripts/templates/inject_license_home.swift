@@ -1,9 +1,11 @@
 
 struct InjectLicenseHomeView: View {
     @EnvironmentObject private var appState: AppState
+    @Environment(\.scenePhase) private var scenePhase
     @State private var snapshot: LicenseProfileSnapshot?
     @State private var lastCheck: Date?
     @State private var networkUnavailable = false
+    @State private var validationDenied = false
     private let red = Color(red: 0.96, green: 0.12, blue: 0.20)
     private let border = Color(red: 0.58, green: 0.035, blue: 0.09)
 
@@ -23,11 +25,7 @@ struct InjectLicenseHomeView: View {
         return nil
     }
     private var durationLabel: String {
-        guard let seconds = durationSeconds else { return "prazo não informado" }
-        let minutes = Int(seconds / 60)
-        if minutes % 1440 == 0 { return "\(minutes / 1440) dias" }
-        if minutes % 60 == 0 { return "\(minutes / 60) horas" }
-        return "\(minutes) minutos"
+        InjectLicenseClock.durationLabel(seconds: durationSeconds)
     }
     private var deviceID: String {
         let id = snapshot?.deviceID ?? UIDevice.current.identifierForVendor?.uuidString ?? "indisponível"
@@ -41,19 +39,14 @@ struct InjectLicenseHomeView: View {
         return formatter.string(from: date)
     }
     private func active(at date: Date) -> Bool {
-        guard let snapshot else { return false }
+        guard let snapshot, !validationDenied else { return false }
         if let endDate, endDate <= date { return false }
         return snapshot.status.uppercased().contains("ATIVO")
     }
     private func remaining(at date: Date) -> String {
-        guard let endDate else { return "não configurada" }
-        let seconds = max(0, Int(endDate.timeIntervalSince(date)))
-        let days = seconds / 86400
-        let hours = (seconds / 3600) % 24
-        let minutes = (seconds / 60) % 60
-        if days > 0 { return "\(durationLabel) · \(days)d \(hours)h restantes" }
-        if hours > 0 { return "\(durationLabel) · \(hours)h \(minutes)m restantes" }
-        return "\(durationLabel) · \(minutes)m restantes"
+        let clock = InjectLicenseClock(expiresAt: endDate, now: date)
+        guard clock.totalSeconds != nil else { return "não configurada" }
+        return "\(durationLabel) · \(clock.remainingText)"
     }
 
     var body: some View {
@@ -66,15 +59,11 @@ struct InjectLicenseHomeView: View {
                         .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
                         .frame(maxWidth: .infinity).padding(.top, 8)
                     HStack(spacing: 16) {
-                        Image("InjectCHZLogo").resizable().scaledToFit()
-                            .frame(width: 46, height: 46).padding(5)
-                            .background(Color.black, in: RoundedRectangle(cornerRadius: 12))
-                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(border.opacity(0.7), lineWidth: 1))
                         Image("InjectCHZLogo").resizable().scaledToFit().frame(width: 130, height: 86)
                             .accessibilityLabel("inject chz")
                         Spacer()
                     }.padding(.bottom, 5)
-                    TimelineView(.periodic(from: .now, by: 60)) { clock in
+                    TimelineView(.periodic(from: .now, by: 1)) { clock in
                         VStack(alignment: .leading, spacing: 18) {
                             timeCard(at: clock.date)
                             sectionLabel("INFORMAÇÕES DA LICENÇA")
@@ -85,8 +74,6 @@ struct InjectLicenseHomeView: View {
                                 divider
                                 row("Tempo da Key", value: remaining(at: clock.date))
                                 divider
-                                row("Expiração", value: expiration)
-                                divider
                                 row("ID do Dispositivo", value: deviceID, subdued: true)
                             }
                         }
@@ -96,8 +83,6 @@ struct InjectLicenseHomeView: View {
                         row("Modelo", value: AppInfo.displayMachineName)
                         divider
                         row("Versão iOS", value: "\(AppInfo.osVersion) (\(AppInfo.osBuild))")
-                        divider
-                        row("Compatibilidade Root/PMAP", value: appState.isSupported ? "COMPATÍVEL (SIM)" : "INCOMPATÍVEL", highlighted: true)
                     }
                     sectionLabel("SEGURANÇA & ANTICRACK")
                     card {
@@ -118,6 +103,16 @@ struct InjectLicenseHomeView: View {
             snapshot = LicenseStore.profileSnapshot
             await refreshLicense()
         }
+        .onReceive(NotificationCenter.default.publisher(for: LicenseStore.profileDidChange)) { _ in
+            snapshot = LicenseStore.profileSnapshot
+            validationDenied = false
+            networkUnavailable = false
+            lastCheck = Date()
+        }
+        .onChange(of: scenePhase) { phase in
+            if phase == .active { Task { await refreshLicense() } }
+        }
+        .refreshable { await refreshLicense() }
     }
 
     private var signaturePresent: Bool {
@@ -133,17 +128,22 @@ struct InjectLicenseHomeView: View {
         do {
             let response = try await LicenseAPI.validate(key: key)
             await MainActor.run {
+                // The hidden home may have requested the previously stored key before login.
+                // Never let that late response replace a newly validated key/profile.
+                guard LicenseStore.storedKey == key else { return }
                 lastCheck = Date()
                 networkUnavailable = false
+                validationDenied = !response.valid
                 if response.valid {
                     LicenseStore.save(key, response: response)
-                    snapshot = LicenseStore.profileSnapshot
-                } else {
-                    snapshot = nil
                 }
+                snapshot = LicenseStore.profileSnapshot
             }
         } catch {
-            await MainActor.run { networkUnavailable = true }
+            await MainActor.run {
+                guard LicenseStore.storedKey == key else { return }
+                networkUnavailable = true
+            }
         }
     }
     private func sectionLabel(_ text: String) -> some View {
@@ -170,13 +170,8 @@ struct InjectLicenseHomeView: View {
             .shadow(color: red.opacity(0.12), radius: 9, y: 3)
     }
     private func timeCard(at now: Date) -> some View {
-        let seconds = endDate.map { max(0, Int($0.timeIntervalSince(now))) }
-        let days = seconds.map { $0 / 86400 }
-        let hours = seconds.map { ($0 / 3600) % 24 }
-        let ratio: Double = {
-            guard let seconds, let duration = durationSeconds, duration > 0 else { return 0 }
-            return min(1, max(0, Double(seconds) / duration))
-        }()
+        let clock = InjectLicenseClock(expiresAt: endDate, now: now)
+        let ratio = clock.fraction(duration: durationSeconds)
         return VStack(alignment: .leading, spacing: 9) {
             HStack {
                 Text("TEMPO DE ACESSO").font(.system(size: 9, weight: .medium)).tracking(1.8).foregroundStyle(.gray)
@@ -187,10 +182,10 @@ struct InjectLicenseHomeView: View {
                     .overlay(Capsule().stroke(border.opacity(0.8), lineWidth: 0.5))
             }
             HStack(alignment: .firstTextBaseline, spacing: 7) {
-                Text(days.map { String($0) } ?? "—").font(.system(size: 42, weight: .bold)).foregroundStyle(.white)
-                Text(days == 1 ? "dia" : "dias").font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
+                Text(clock.majorValue).font(.system(size: 42, weight: .bold)).foregroundStyle(.white)
+                Text(clock.majorUnit).font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
             }
-            Text(hours.map { "\($0)h restantes" } ?? "expiração não informada")
+            Text(clock.detail)
                 .font(.system(size: 10)).foregroundStyle(.gray).padding(.leading, 47)
             GeometryReader { area in
                 ZStack(alignment: .leading) {
@@ -202,7 +197,6 @@ struct InjectLicenseHomeView: View {
             HStack {
                 Text(endDate == nil ? "aguardando ativação" : "Expira em \(expiration)")
                 Spacer()
-                Text(durationLabel == "prazo não informado" ? "prazo não informado" : "janela de \(durationLabel)")
             }.font(.system(size: 8)).foregroundStyle(.gray)
         }.padding(14).background(Color(red: 0.068, green: 0.029, blue: 0.035), in: RoundedRectangle(cornerRadius: 16))
             .overlay(RoundedRectangle(cornerRadius: 16).stroke(border, lineWidth: 1))

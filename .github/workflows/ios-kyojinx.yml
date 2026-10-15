@@ -2193,6 +2193,16 @@ jobs:
           python3 scripts/apply_inject_home.py source/3105-1.1.1/ThreeOneOSFive
           grep -q 'InjectLicenseHomeView()' source/3105-1.1.1/ThreeOneOSFive/ContentView.swift
           test -s source/3105-1.1.1/ThreeOneOSFive/Assets.xcassets/InjectCHZLogo.imageset/inject-chz-brand.png
+      - name: Synchronize validated key and live license countdown
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_license_sync.py source/3105-1.1.1/ThreeOneOSFive
+      - name: Verify license synchronization and countdown
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/tests/test_license_sync.py source/3105-1.1.1/ThreeOneOSFive
       - name: Build original archive and IPA
         shell: bash
         run: |
@@ -2201,7 +2211,7 @@ jobs:
           test -n "$PROJECT"
           echo "Using project: $PROJECT"
           SCHEME=$(xcodebuild -list -json -project "$PROJECT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["project"]["schemes"][0])')
-          xcodebuild -project "$PROJECT" -scheme "$SCHEME" -sdk iphoneos -configuration Release -destination 'generic/platform=iOS' -archivePath "$PWD/build/nubank-preloaded-cards.xcarchive" archive LIBRARY_SEARCH_PATHS="$PWD/source/3105-1.1.1/ThreeOneOSFive/SDK" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO MARKETING_VERSION=2026.10.07 CURRENT_PROJECT_VERSION=20261007 SWIFT_OPTIMIZATION_LEVEL=-O STRIP_INSTALLED_PRODUCT=YES COPY_PHASE_STRIP=YES DEAD_CODE_STRIPPING=YES GCC_GENERATE_DEBUGGING_SYMBOLS=NO
+          xcodebuild -project "$PROJECT" -scheme "$SCHEME" -sdk iphoneos -configuration Release -destination 'generic/platform=iOS' -archivePath "$PWD/build/nubank-preloaded-cards.xcarchive" archive LIBRARY_SEARCH_PATHS="$PWD/source/3105-1.1.1/ThreeOneOSFive/SDK" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO MARKETING_VERSION=2026.10.07 CURRENT_PROJECT_VERSION="20261015.${GITHUB_RUN_NUMBER}" SWIFT_OPTIMIZATION_LEVEL=-O STRIP_INSTALLED_PRODUCT=YES COPY_PHASE_STRIP=YES DEAD_CODE_STRIPPING=YES GCC_GENERATE_DEBUGGING_SYMBOLS=NO
           APP=$(find build/nubank-preloaded-cards.xcarchive/Products/Applications -maxdepth 1 -type d -name '*.app' -print -quit)
           test -n "$APP"
           if find "$APP" -type f -name '*.dylib' -print -quit | grep -q .; then
