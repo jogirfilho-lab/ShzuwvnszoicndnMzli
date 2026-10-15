@@ -2109,6 +2109,36 @@ jobs:
           grep -q "textureMainContent" source/3105-1.1.1/ThreeOneOSFive/views/PatchProjectsView.swift
           grep -q "textureOptionCard" source/3105-1.1.1/ThreeOneOSFive/views/PatchProjectsView.swift
           grep -q "if !texturesOnly" source/3105-1.1.1/ThreeOneOSFive/views/PatchProjectsView.swift
+      - name: Add EXTERNAL CHZ logo to key panel
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP=source/3105-1.1.1/ThreeOneOSFive/App.swift
+          python3 - "$APP" <<'PY2'
+          from pathlib import Path
+          import sys
+          p = Path(sys.argv[1])
+          t = p.read_text()
+          start = t.find('struct LicenseLoginView: View')
+          body = t.find('var body: some View', start)
+          image = t.find('Image(systemName:', body)
+          next_text = t.find('Text(', image)
+          if start < 0 or body < 0 or image < 0 or next_text < 0:
+              raise SystemExit('tela de key não encontrada')
+          logo = """Image("ExternalCHZLogo")
+                              .resizable()
+                              .scaledToFit()
+                              .frame(maxWidth: 235, maxHeight: 205)
+                              .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                              .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(AppTheme.accent.opacity(0.75), lineWidth: 1.5))
+                              .shadow(color: AppTheme.accent.opacity(0.32), radius: 18, y: 8)
+                          """
+          t = t[:image] + logo + t[next_text:]
+          p.write_text(t)
+          assert 'Image("ExternalCHZLogo")' in p.read_text()
+          PY2
+          grep -q 'struct LicenseLoginView' "$APP"
+          grep -q 'Image("ExternalCHZLogo")' "$APP"
       - name: Build original archive and IPA
         shell: bash
         run: |
