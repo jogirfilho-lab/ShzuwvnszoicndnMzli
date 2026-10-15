@@ -2203,6 +2203,12 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/tests/test_license_sync.py source/3105-1.1.1/ThreeOneOSFive
+      - name: Merge External catalog into Injetor and optimize patch feedback
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_external_merge.py source/3105-1.1.1/ThreeOneOSFive
+          python3 scripts/tests/test_external_merge.py source/3105-1.1.1/ThreeOneOSFive
       - name: Build original archive and IPA
         shell: bash
         run: |
