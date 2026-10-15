@@ -2180,6 +2180,12 @@ jobs:
           grep -q 'videoSelectionHeader' source/3105-1.1.1/ThreeOneOSFive/views/PatchProjectsView.swift
           grep -q 'videoLogPanel' source/3105-1.1.1/ThreeOneOSFive/views/PatchProjectsView.swift
           grep -q 'sectionContent(.home)' source/3105-1.1.1/ThreeOneOSFive/ContentView.swift
+      - name: Match key entry screen to latest reference
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_key_reference.py source/3105-1.1.1/ThreeOneOSFive
+          grep -q 'shield.lefthalf.filled' source/3105-1.1.1/ThreeOneOSFive/App.swift
       - name: Build original archive and IPA
         shell: bash
         run: |
