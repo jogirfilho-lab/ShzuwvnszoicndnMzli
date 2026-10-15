@@ -2139,6 +2139,84 @@ jobs:
           PY2
           grep -q 'struct LicenseLoginView' "$APP"
           grep -q 'Image("ExternalCHZLogo")' "$APP"
+      - name: Move External categories to top navigation
+        shell: bash
+        run: |
+          set -euo pipefail
+          PANEL=source/3105-1.1.1/ThreeOneOSFive/views/PatchProjectsView.swift
+          python3 - "$PANEL" <<'PY2'
+          from pathlib import Path
+          import sys
+          p = Path(sys.argv[1])
+          t = p.read_text()
+          old_body = '''            HStack(spacing: 0) {
+                if !texturesOnly {
+                    sidebar
+                    Divider().overlay(accent.opacity(0.28)).padding(.vertical, 14)
+                }
+                mainContent
+            }'''
+          new_body = '''            VStack(spacing: 0) {
+                if !texturesOnly {
+                    topCategoryBar
+                    Divider().overlay(accent.opacity(0.28)).padding(.horizontal, 14)
+                }
+                mainContent
+            }'''
+          if old_body not in t:
+              old_body = '''            HStack(spacing: 0) {
+                sidebar
+                Divider().overlay(accent.opacity(0.28)).padding(.vertical, 14)
+                mainContent
+            }'''
+          if old_body not in t:
+              raise SystemExit('estrutura do painel External não encontrada')
+          t = t.replace(old_body, new_body, 1)
+          start = t.find('    private var sidebar: some View {')
+          end = t.find('    private var themeDots: some View {', start)
+          if start < 0 or end < 0:
+              raise SystemExit('menu lateral não encontrado')
+          top = '''    private var topCategoryBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "gamecontroller.fill")
+                .font(.system(size: 17, weight: .bold))
+                .foregroundStyle(accent)
+                .frame(width: 34, height: 34)
+                .background(accent.opacity(0.13), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(Category.allCases) { item in
+                        Button { category = item } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: item.icon).font(.system(size: 13, weight: .semibold))
+                                Text(item.rawValue == "Extras/Ferramentas" ? "Extras" : item.rawValue)
+                                    .font(.system(size: 10, weight: .bold))
+                                    .lineLimit(1)
+                            }
+                            .foregroundStyle(category == item ? .white : secondaryText)
+                            .padding(.horizontal, 11)
+                            .frame(height: 36)
+                            .background(category == item ? accent : Color.clear, in: Capsule())
+                            .overlay(Capsule().stroke(accent.opacity(category == item ? 0.95 : 0.22), lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            themeDots
+        }
+        .padding(.horizontal, 2)
+        .padding(.vertical, 5)
+    }
+
+'''
+          t = t[:start] + top + t[end:]
+          p.write_text(t)
+          assert 'private var topCategoryBar: some View' in p.read_text()
+          assert 'private var sidebar: some View' not in p.read_text()
+          PY2
+          grep -q 'private var topCategoryBar' "$PANEL"
+          ! grep -q 'private var sidebar' "$PANEL"
       - name: Build original archive and IPA
         shell: bash
         run: |
