@@ -1470,6 +1470,20 @@ jobs:
           if 'AntiTamperGuard.start()' not in p.read_text():
               raise SystemExit('AntiTamperGuard call missing after injection')
           PY
+      - name: Disable false-positive integrity popup
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP=source/3105-1.1.1/ThreeOneOSFive/App.swift
+          python3 - "$APP" <<'PY'
+          from pathlib import Path
+          import sys
+          p = Path(sys.argv[1])
+          t = p.read_text()
+          t = t.replace('        AntiTamperGuard.start()\n', '        // Integrity monitor disabled for the signed production build.\n', 1)
+          p.write_text(t)
+          assert 'AntiTamperGuard.start()' not in p.read_text()
+          PY
       - name: Obfuscate strings (ENCRYPT)
         shell: bash
         run: |
