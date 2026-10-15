@@ -55,11 +55,11 @@ compact = '''    private var compactLayout: some View {
                             withAnimation(.easeInOut(duration: 0.16)) { tabNavigation.select(section.rawValue) }
                         } label: {
                             VStack(spacing: 5) {
-                                Image(systemName: injectIcon(section)).font(.system(size: 18, weight: .semibold))
-                                Text(injectTitle(section)).font(.system(size: 9, weight: .semibold))
+                                Image(systemName: injectIcon(section)).font(.system(size: 21, weight: .semibold))
+                                Text(injectTitle(section)).font(.system(size: 11, weight: .semibold))
                             }
                             .foregroundStyle(selected ? Color(red: 0.96, green: 0.12, blue: 0.20) : Color.white.opacity(0.46))
-                            .frame(maxWidth: .infinity).frame(height: 48)
+                            .frame(maxWidth: .infinity).frame(height: 54)
                             .background(selected ? Color.red.opacity(0.10) : Color.clear, in: RoundedRectangle(cornerRadius: 14))
                             .overlay(RoundedRectangle(cornerRadius: 14).stroke(selected ? Color.red.opacity(0.30) : Color.clear, lineWidth: 0.5))
                         }.buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])

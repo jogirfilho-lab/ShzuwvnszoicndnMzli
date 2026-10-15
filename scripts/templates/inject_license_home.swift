@@ -55,14 +55,12 @@ struct InjectLicenseHomeView: View {
                 .ignoresSafeArea()
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 18) {
-                    Text("Licença")
-                        .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
-                        .frame(maxWidth: .infinity).padding(.top, 8)
-                    HStack(spacing: 16) {
-                        Image("InjectCHZLogo").resizable().scaledToFit().frame(width: 130, height: 86)
-                            .accessibilityLabel("inject chz")
-                        Spacer()
-                    }.padding(.bottom, 5)
+                    Image("InjectCHZLogo")
+                        .resizable().scaledToFit()
+                        .frame(width: 176, height: 116)
+                        .accessibilityLabel("inject chz")
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 12).padding(.bottom, 14)
                     TimelineView(.periodic(from: .now, by: 1)) { clock in
                         VStack(alignment: .leading, spacing: 18) {
                             timeCard(at: clock.date)
@@ -84,16 +82,6 @@ struct InjectLicenseHomeView: View {
                         divider
                         row("Versão iOS", value: "\(AppInfo.osVersion) (\(AppInfo.osBuild))")
                     }
-                    sectionLabel("SEGURANÇA & ANTICRACK")
-                    card {
-                        row("Proteção Anti-Debugging", value: "⚠  NÃO VERIFICADA", highlighted: true)
-                        divider
-                        row("Integridade do painel", value: signaturePresent ? "ASSINATURA PRESENTE" : "NÃO VERIFICADA", highlighted: true)
-                    }
-                    HStack(spacing: 5) {
-                        Image(systemName: "shield.fill").font(.system(size: 9))
-                        Text(checkFooter).font(.system(size: 9))
-                    }.foregroundStyle(Color.white.opacity(0.42)).frame(maxWidth: .infinity).padding(.vertical, 6)
                 }.padding(.horizontal, 16).padding(.bottom, 12)
             }
         }
@@ -147,7 +135,7 @@ struct InjectLicenseHomeView: View {
         }
     }
     private func sectionLabel(_ text: String) -> some View {
-        Text(text).font(.system(size: 10, weight: .bold)).tracking(1.4)
+        Text(text).font(.system(size: 12, weight: .bold)).tracking(1.4)
             .foregroundStyle(Color.white.opacity(0.9)).padding(.top, 2).padding(.horizontal, 2)
     }
     private var divider: some View {
@@ -155,12 +143,12 @@ struct InjectLicenseHomeView: View {
     }
     private func row(_ title: String, value: String, highlighted: Bool = false, subdued: Bool = false) -> some View {
         HStack(spacing: 10) {
-            Text(title).font(.system(size: 12)).foregroundStyle(.white)
+            Text(title).font(.system(size: 15)).foregroundStyle(.white)
             Spacer(minLength: 8)
-            Text(value).font(.system(size: 11, weight: highlighted ? .bold : .medium))
+            Text(value).font(.system(size: 14, weight: highlighted ? .bold : .medium))
                 .foregroundStyle(highlighted ? red : Color.white.opacity(subdued ? 0.40 : 0.72))
                 .multilineTextAlignment(.trailing).lineLimit(2).minimumScaleFactor(0.8)
-        }.padding(.horizontal, 14).padding(.vertical, 18)
+        }.padding(.horizontal, 14).padding(.vertical, 20)
     }
     private func card<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         VStack(spacing: 0, content: content)
@@ -174,31 +162,39 @@ struct InjectLicenseHomeView: View {
         let ratio = clock.fraction(duration: durationSeconds)
         return VStack(alignment: .leading, spacing: 9) {
             HStack {
-                Text("TEMPO DE ACESSO").font(.system(size: 9, weight: .medium)).tracking(1.8).foregroundStyle(.gray)
+                Text("TEMPO DE ACESSO").font(.system(size: 12, weight: .medium)).tracking(1.8).foregroundStyle(.gray)
                 Spacer()
-                Text(active(at: now) ? "ATIVO" : "INATIVO").font(.system(size: 8, weight: .bold)).tracking(0.9)
+                Text(active(at: now) ? "ATIVO" : "INATIVO").font(.system(size: 11, weight: .bold)).tracking(0.9)
                     .foregroundStyle(red).padding(.horizontal, 13).padding(.vertical, 5)
                     .background(red.opacity(0.07), in: Capsule())
                     .overlay(Capsule().stroke(border.opacity(0.8), lineWidth: 0.5))
             }
-            HStack(alignment: .firstTextBaseline, spacing: 7) {
-                Text(clock.majorValue).font(.system(size: 42, weight: .bold)).foregroundStyle(.white)
-                Text(clock.majorUnit).font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
-            }
-            Text(clock.detail)
-                .font(.system(size: 10)).foregroundStyle(.gray).padding(.leading, 47)
+            HStack(alignment: .top, spacing: 10) {
+                Text(clock.majorValue)
+                    .font(.system(size: 52, weight: .bold)).monospacedDigit()
+                    .foregroundStyle(.white)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(clock.majorUnit.uppercased())
+                        .font(.system(size: 21, weight: .bold)).foregroundStyle(.white)
+                    Text(clock.detail)
+                        .font(.system(size: 13)).monospacedDigit()
+                        .foregroundStyle(Color.white.opacity(0.62))
+                        .lineLimit(2).minimumScaleFactor(0.8)
+                }.padding(.top, 14)
+                Spacer(minLength: 0)
+            }.padding(.top, 12).padding(.bottom, 15)
             GeometryReader { area in
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.white.opacity(0.05))
                     Capsule().fill(LinearGradient(colors: [Color(red: 0.68, green: 0.025, blue: 0.09), red], startPoint: .leading, endPoint: .trailing))
                         .frame(width: area.size.width * CGFloat(ratio))
                 }
-            }.frame(height: 4)
+            }.frame(height: 5)
             HStack {
                 Text(endDate == nil ? "aguardando ativação" : "Expira em \(expiration)")
                 Spacer()
-            }.font(.system(size: 8)).foregroundStyle(.gray)
-        }.padding(14).background(Color(red: 0.068, green: 0.029, blue: 0.035), in: RoundedRectangle(cornerRadius: 16))
+            }.font(.system(size: 11)).foregroundStyle(.gray).padding(.top, 3)
+        }.padding(16).background(Color(red: 0.068, green: 0.029, blue: 0.035), in: RoundedRectangle(cornerRadius: 16))
             .overlay(RoundedRectangle(cornerRadius: 16).stroke(border, lineWidth: 1))
             .shadow(color: red.opacity(0.10), radius: 8)
     }

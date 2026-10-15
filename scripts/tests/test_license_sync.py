@@ -27,3 +27,11 @@ assert 'guard LicenseStore.storedKey == key else { return }' in a
 assert 'onReceive(NotificationCenter.default.publisher(for: LicenseStore.profileDidChange))' in a
 assert 'TimelineView(.periodic(from: .now, by: 1))' in a
 print('Production home lifecycle and stale-response guards verified.')
+
+# Latest reference layout must not replace the dynamic clock with screenshot values.
+assert 'Text(clock.majorValue)' in a
+assert 'Text(clock.majorUnit.uppercased())' in a
+assert 'Text(clock.detail)' in a
+assert '.frame(maxWidth: .infinity)' in a
+assert 'janela de' not in a[a.index('struct InjectLicenseHomeView: View'):a.index('struct InjectLicenseClock')]
+print('Enlarged reference layout retains the live countdown.')
