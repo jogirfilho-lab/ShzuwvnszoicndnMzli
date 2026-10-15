@@ -2144,77 +2144,8 @@ jobs:
         run: |
           set -euo pipefail
           PANEL=source/3105-1.1.1/ThreeOneOSFive/views/PatchProjectsView.swift
-          python3 - "$PANEL" <<'PY2'
-          from pathlib import Path
-          import sys
-          p = Path(sys.argv[1])
-          t = p.read_text()
-          old_body = '''            HStack(spacing: 0) {
-                if !texturesOnly {
-                    sidebar
-                    Divider().overlay(accent.opacity(0.28)).padding(.vertical, 14)
-                }
-                mainContent
-            }'''
-          new_body = '''            VStack(spacing: 0) {
-                if !texturesOnly {
-                    topCategoryBar
-                    Divider().overlay(accent.opacity(0.28)).padding(.horizontal, 14)
-                }
-                mainContent
-            }'''
-          if old_body not in t:
-              old_body = '''            HStack(spacing: 0) {
-                sidebar
-                Divider().overlay(accent.opacity(0.28)).padding(.vertical, 14)
-                mainContent
-            }'''
-          if old_body not in t:
-              raise SystemExit('estrutura do painel External não encontrada')
-          t = t.replace(old_body, new_body, 1)
-          start = t.find('    private var sidebar: some View {')
-          end = t.find('    private var themeDots: some View {', start)
-          if start < 0 or end < 0:
-              raise SystemExit('menu lateral não encontrado')
-          top = '''    private var topCategoryBar: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "gamecontroller.fill")
-                .font(.system(size: 17, weight: .bold))
-                .foregroundStyle(accent)
-                .frame(width: 34, height: 34)
-                .background(accent.opacity(0.13), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(Category.allCases) { item in
-                        Button { category = item } label: {
-                            HStack(spacing: 5) {
-                                Image(systemName: item.icon).font(.system(size: 13, weight: .semibold))
-                                Text(item.rawValue == "Extras/Ferramentas" ? "Extras" : item.rawValue)
-                                    .font(.system(size: 10, weight: .bold))
-                                    .lineLimit(1)
-                            }
-                            .foregroundStyle(category == item ? .white : secondaryText)
-                            .padding(.horizontal, 11)
-                            .frame(height: 36)
-                            .background(category == item ? accent : Color.clear, in: Capsule())
-                            .overlay(Capsule().stroke(accent.opacity(category == item ? 0.95 : 0.22), lineWidth: 1))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-            themeDots
-        }
-        .padding(.horizontal, 2)
-        .padding(.vertical, 5)
-    }
-
-'''
-          t = t[:start] + top + t[end:]
-          p.write_text(t)
-          assert 'private var topCategoryBar: some View' in p.read_text()
-          assert 'private var sidebar: some View' not in p.read_text()
-          PY2
+          echo 'ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCmltcG9ydCBzeXMKcCA9IFBhdGgoc3lzLmFyZ3ZbMV0pCnQgPSBwLnJlYWRfdGV4dCgpCm9sZF9ib2R5ID0gJycnICAgICAgICAgICAgSFN0YWNrKHNwYWNpbmc6IDApIHsKICAgICAgICAgICAgICAgIGlmICF0ZXh0dXJlc09ubHkgewogICAgICAgICAgICAgICAgICAgIHNpZGViYXIKICAgICAgICAgICAgICAgICAgICBEaXZpZGVyKCkub3ZlcmxheShhY2NlbnQub3BhY2l0eSgwLjI4KSkucGFkZGluZygudmVydGljYWwsIDE0KQogICAgICAgICAgICAgICAgfQogICAgICAgICAgICAgICAgbWFpbkNvbnRlbnQKICAgICAgICAgICAgfScnJwpuZXdfYm9keSA9ICcnJyAgICAgICAgICAgIFZTdGFjayhzcGFjaW5nOiAwKSB7CiAgICAgICAgICAgICAgICBpZiAhdGV4dHVyZXNPbmx5IHsKICAgICAgICAgICAgICAgICAgICB0b3BDYXRlZ29yeUJhcgogICAgICAgICAgICAgICAgICAgIERpdmlkZXIoKS5vdmVybGF5KGFjY2VudC5vcGFjaXR5KDAuMjgpKS5wYWRkaW5nKC5ob3Jpem9udGFsLCAxNCkKICAgICAgICAgICAgICAgIH0KICAgICAgICAgICAgICAgIG1haW5Db250ZW50CiAgICAgICAgICAgIH0nJycKaWYgb2xkX2JvZHkgbm90IGluIHQ6CiAgICBvbGRfYm9keSA9ICcnJyAgICAgICAgICAgIEhTdGFjayhzcGFjaW5nOiAwKSB7CiAgICAgICAgICAgICAgICBzaWRlYmFyCiAgICAgICAgICAgICAgICBEaXZpZGVyKCkub3ZlcmxheShhY2NlbnQub3BhY2l0eSgwLjI4KSkucGFkZGluZygudmVydGljYWwsIDE0KQogICAgICAgICAgICAgICAgbWFpbkNvbnRlbnQKICAgICAgICAgICAgfScnJwppZiBvbGRfYm9keSBub3QgaW4gdDoKICAgIHJhaXNlIFN5c3RlbUV4aXQoJ2VzdHJ1dHVyYSBkbyBwYWluZWwgRXh0ZXJuYWwgbsOjbyBlbmNvbnRyYWRhJykKdCA9IHQucmVwbGFjZShvbGRfYm9keSwgbmV3X2JvZHksIDEpCnN0YXJ0ID0gdC5maW5kKCcgICAgcHJpdmF0ZSB2YXIgc2lkZWJhcjogc29tZSBWaWV3IHsnKQplbmQgPSB0LmZpbmQoJyAgICBwcml2YXRlIHZhciB0aGVtZURvdHM6IHNvbWUgVmlldyB7Jywgc3RhcnQpCmlmIHN0YXJ0IDwgMCBvciBlbmQgPCAwOgogICAgcmFpc2UgU3lzdGVtRXhpdCgnbWVudSBsYXRlcmFsIG7Do28gZW5jb250cmFkbycpCnRvcCA9ICcnJyAgICBwcml2YXRlIHZhciB0b3BDYXRlZ29yeUJhcjogc29tZSBWaWV3IHsKICAgICAgICBIU3RhY2soc3BhY2luZzogOCkgewogICAgICAgICAgICBJbWFnZShzeXN0ZW1OYW1lOiAiZ2FtZWNvbnRyb2xsZXIuZmlsbCIpCiAgICAgICAgICAgICAgICAuZm9udCguc3lzdGVtKHNpemU6IDE3LCB3ZWlnaHQ6IC5ib2xkKSkKICAgICAgICAgICAgICAgIC5mb3JlZ3JvdW5kU3R5bGUoYWNjZW50KQogICAgICAgICAgICAgICAgLmZyYW1lKHdpZHRoOiAzNCwgaGVpZ2h0OiAzNCkKICAgICAgICAgICAgICAgIC5iYWNrZ3JvdW5kKGFjY2VudC5vcGFjaXR5KDAuMTMpLCBpbjogUm91bmRlZFJlY3RhbmdsZShjb3JuZXJSYWRpdXM6IDEwLCBzdHlsZTogLmNvbnRpbnVvdXMpKQogICAgICAgICAgICBTY3JvbGxWaWV3KC5ob3Jpem9udGFsLCBzaG93c0luZGljYXRvcnM6IGZhbHNlKSB7CiAgICAgICAgICAgICAgICBIU3RhY2soc3BhY2luZzogOCkgewogICAgICAgICAgICAgICAgICAgIEZvckVhY2goQ2F0ZWdvcnkuYWxsQ2FzZXMpIHsgaXRlbSBpbgogICAgICAgICAgICAgICAgICAgICAgICBCdXR0b24geyBjYXRlZ29yeSA9IGl0ZW0gfSBsYWJlbDogewogICAgICAgICAgICAgICAgICAgICAgICAgICAgSFN0YWNrKHNwYWNpbmc6IDUpIHsKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBJbWFnZShzeXN0ZW1OYW1lOiBpdGVtLmljb24pLmZvbnQoLnN5c3RlbShzaXplOiAxMywgd2VpZ2h0OiAuc2VtaWJvbGQpKQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIFRleHQoaXRlbS5yYXdWYWx1ZSA9PSAiRXh0cmFzL0ZlcnJhbWVudGFzIiA/ICJFeHRyYXMiIDogaXRlbS5yYXdWYWx1ZSkKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgLmZvbnQoLnN5c3RlbShzaXplOiAxMCwgd2VpZ2h0OiAuYm9sZCkpCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC5saW5lTGltaXQoMSkKICAgICAgICAgICAgICAgICAgICAgICAgICAgIH0KICAgICAgICAgICAgICAgICAgICAgICAgICAgIC5mb3JlZ3JvdW5kU3R5bGUoY2F0ZWdvcnkgPT0gaXRlbSA/IC53aGl0ZSA6IHNlY29uZGFyeVRleHQpCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAucGFkZGluZyguaG9yaXpvbnRhbCwgMTEpCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAuZnJhbWUoaGVpZ2h0OiAzNikKICAgICAgICAgICAgICAgICAgICAgICAgICAgIC5iYWNrZ3JvdW5kKGNhdGVnb3J5ID09IGl0ZW0gPyBhY2NlbnQgOiBDb2xvci5jbGVhciwgaW46IENhcHN1bGUoKSkKICAgICAgICAgICAgICAgICAgICAgICAgICAgIC5vdmVybGF5KENhcHN1bGUoKS5zdHJva2UoYWNjZW50Lm9wYWNpdHkoY2F0ZWdvcnkgPT0gaXRlbSA/IDAuOTUgOiAwLjIyKSwgbGluZVdpZHRoOiAxKSkKICAgICAgICAgICAgICAgICAgICAgICAgfQogICAgICAgICAgICAgICAgICAgICAgICAuYnV0dG9uU3R5bGUoLnBsYWluKQogICAgICAgICAgICAgICAgICAgIH0KICAgICAgICAgICAgICAgIH0KICAgICAgICAgICAgfQogICAgICAgICAgICB0aGVtZURvdHMKICAgICAgICB9CiAgICAgICAgLnBhZGRpbmcoLmhvcml6b250YWwsIDIpCiAgICAgICAgLnBhZGRpbmcoLnZlcnRpY2FsLCA1KQogICAgfQoKJycnCnQgPSB0WzpzdGFydF0gKyB0b3AgKyB0W2VuZDpdCnAud3JpdGVfdGV4dCh0KQphc3NlcnQgJ3ByaXZhdGUgdmFyIHRvcENhdGVnb3J5QmFyOiBzb21lIFZpZXcnIGluIHAucmVhZF90ZXh0KCkKYXNzZXJ0ICdwcml2YXRlIHZhciBzaWRlYmFyOiBzb21lIFZpZXcnIG5vdCBpbiBwLnJlYWRfdGV4dCgpCg==' | base64 -d > /tmp/move_external_menu.py
+          python3 /tmp/move_external_menu.py "$PANEL"
           grep -q 'private var topCategoryBar' "$PANEL"
           ! grep -q 'private var sidebar' "$PANEL"
       - name: Build original archive and IPA
