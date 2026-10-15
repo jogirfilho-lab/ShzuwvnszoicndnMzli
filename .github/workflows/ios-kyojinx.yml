@@ -1992,6 +1992,7 @@ jobs:
           t = t.replace('@AppStorage("patchesDarkMode") private var darkMode = false', '@State private var darkMode = true')
           t = t.replace('@AppStorage("patchesDarkMode") private var darkMode = true', '@State private var darkMode = true')
           t = t.replace('Text("EXTERNAL KNZAC")', 'Text("CHZ CHEATS")')
+          t = t.replace('Text("CHZ")', 'Text("CHZ CHEATS")', 1)
           start = t.find('private var header: some View')
           end = t.find('private func sectionTitle', start)
           if start >= 0 and end > start:
