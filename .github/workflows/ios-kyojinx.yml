@@ -17,6 +17,29 @@ jobs:
           tar -xzf 3105-1.1.1-original.tar.gz -C source
           PROJECT=source/3105-1.1.1/ThreeOneOSFive.xcodeproj
           echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
+      - name: Set official iOS app display name
+        shell: bash
+        run: |
+          set -euo pipefail
+          INFO=source/3105-1.1.1/ThreeOneOSFive/Info.plist
+          PROJECT_SETTINGS=source/3105-1.1.1/ThreeOneOSFive.xcodeproj/project.pbxproj
+          python3 - "$INFO" "$PROJECT_SETTINGS" <<'PY2'
+          from pathlib import Path
+          import sys
+          info, project = map(Path, sys.argv[1:])
+          t = info.read_text()
+          t = t.replace('<key>CFBundleDisplayName</key>\n    <string>3105</string>', '<key>CFBundleDisplayName</key>\n    <string>EXTERNAL CHZ</string>')
+          t = t.replace('<key>CFBundleName</key>\n    <string>3105</string>', '<key>CFBundleName</key>\n    <string>EXTERNAL CHZ</string>')
+          info.write_text(t)
+          p = project.read_text()
+          p = p.replace('INFOPLIST_KEY_CFBundleDisplayName = 3105;', 'INFOPLIST_KEY_CFBundleDisplayName = "EXTERNAL CHZ";')
+          project.write_text(p)
+          assert '<string>EXTERNAL CHZ</string>' in info.read_text()
+          assert 'INFOPLIST_KEY_CFBundleDisplayName = "EXTERNAL CHZ";' in project.read_text()
+          PY2
+          grep -q 'CFBundleDisplayName</key>' "$INFO"
+          grep -q 'EXTERNAL CHZ' "$INFO"
+          grep -q 'INFOPLIST_KEY_CFBundleDisplayName = "EXTERNAL CHZ"' "$PROJECT_SETTINGS"
       - name: Hide legacy URLs from executable
         shell: bash
         run: |
