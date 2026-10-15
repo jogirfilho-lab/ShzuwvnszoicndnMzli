@@ -2186,6 +2186,13 @@ jobs:
           set -euo pipefail
           python3 scripts/apply_key_reference.py source/3105-1.1.1/ThreeOneOSFive
           grep -q 'shield.lefthalf.filled' source/3105-1.1.1/ThreeOneOSFive/App.swift
+      - name: Apply inject chz license home reference
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_inject_home.py source/3105-1.1.1/ThreeOneOSFive
+          grep -q 'InjectLicenseHomeView()' source/3105-1.1.1/ThreeOneOSFive/ContentView.swift
+          test -s source/3105-1.1.1/ThreeOneOSFive/Assets.xcassets/InjectCHZLogo.imageset/inject-chz-brand.png
       - name: Build original archive and IPA
         shell: bash
         run: |
