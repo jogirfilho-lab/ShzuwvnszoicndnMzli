@@ -2215,6 +2215,14 @@ jobs:
           set -euo pipefail
           python3 scripts/apply_external_cheats.py source/3105-1.1.1/ThreeOneOSFive
           python3 scripts/tests/test_external_cheats.py source/3105-1.1.1/ThreeOneOSFive
+      - name: Recover persisted patch conflicts safely
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_patch_recovery.py source/3105-1.1.1/ThreeOneOSFive
+          mkdir -p recovery-tests
+          xcrun swiftc -parse-as-library -o recovery-tests/patch-recovery-tests source/3105-1.1.1/ThreeOneOSFive/helpers/PatchProjectModels.swift source/3105-1.1.1/ThreeOneOSFive/helpers/PatchTransaction.swift scripts/tests/patch_recovery_tests.swift
+          recovery-tests/patch-recovery-tests
       - name: Build original archive and IPA
         shell: bash
         run: |
