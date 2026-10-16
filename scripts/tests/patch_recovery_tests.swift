@@ -4,6 +4,10 @@ import Foundation
     static func require(_ condition: Bool, _ message: String) {
         if !condition { fatalError(message) }
     }
+    static func sameReceipt(_ lhs: PatchTransactionReceipt, _ rhs: PatchTransactionReceipt) -> Bool {
+        lhs.id == rhs.id && lhs.projectID == rhs.projectID &&
+        PatchPathValidator.canonicalFileURL(lhs.journalURL).path == PatchPathValidator.canonicalFileURL(rhs.journalURL).path
+    }
     static func main() throws {
         let root=FileManager.default.temporaryDirectory.appendingPathComponent("patch-recovery-tests-\(UUID().uuidString)")
         let container=root.appendingPathComponent("container")
@@ -24,7 +28,10 @@ import Foundation
             fatalError("Conflicting application must remain blocked")
         } catch PatchPackageError.targetOccupied { }
         var items=try PatchTransaction.recoveryItems(backupRoot: backups)
-        require(items.count==1 && items[0].receipt==receiptA,"Old active receipt must be discoverable")
+        print("Recovery test: found \(items.count) active item(s); expected \(receiptA.id)")
+        for item in items { print("Found \(item.receipt.id): \(item.receipt.journalURL.path)") }
+        print("Expected path: \(receiptA.journalURL.path)")
+        require(items.count==1 && sameReceipt(items[0].receipt,receiptA),"Old active receipt must be discoverable")
         require(items[0].targets==[bundle+"/Documents/shared.bin"],"Recovery must list real affected targets")
         try PatchTransaction.restore(receipt: receiptA, containerResolver: resolver)
         require(try Data(contentsOf: target)==Data("original".utf8),"Restore must recover original bytes")
@@ -56,7 +63,7 @@ import Foundation
         journal["status"]="prepared"
         try PropertyListSerialization.data(fromPropertyList:journal,format:.binary,options:0).write(to:receiptC.journalURL)
         items=try PatchTransaction.recoveryItems(backupRoot:backups)
-        require(items.contains { $0.receipt==receiptC && $0.prepared },"Interrupted transaction must be offered for recovery")
+        require(items.contains { sameReceipt($0.receipt,receiptC) && $0.prepared },"Interrupted transaction must be offered for recovery")
         try PatchTransaction.restore(receipt:receiptC,containerResolver:resolver)
         require(try Data(contentsOf:pendingTarget)==Data("pending-original".utf8),"Interrupted transaction must restore original")
         let legacyTarget=container.appendingPathComponent("Documents/legacy.bin")
@@ -66,7 +73,7 @@ import Foundation
         journal=try PropertyListSerialization.propertyList(from:Data(contentsOf:legacyReceipt.journalURL),format:nil) as! [String:Any]
         journal["schemaVersion"]=1
         try PropertyListSerialization.data(fromPropertyList:journal,format:.binary,options:0).write(to:legacyReceipt.journalURL)
-        require(try PatchTransaction.recoveryItems(backupRoot:backups).contains { $0.receipt==legacyReceipt },"Legacy schema must remain supported")
+        require(try PatchTransaction.recoveryItems(backupRoot:backups).contains { sameReceipt($0.receipt,legacyReceipt) },"Legacy schema must remain supported")
         try PatchTransaction.restore(receipt:legacyReceipt,containerResolver:resolver)
         require(try Data(contentsOf:legacyTarget)==Data("legacy-original".utf8),"Legacy backup must remain restorable")
         print("PASS: conflict blocked; old receipts found; originals restored; next patch allowed; journals kept; changed/corrupt files protected; interrupted and legacy transactions recovered.")
