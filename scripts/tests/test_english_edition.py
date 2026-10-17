@@ -13,7 +13,10 @@ assert 'Text("CHAVE DE ACESSO")' not in app and 'Text("ENTRAR")' not in app
 assert 'static let allCases: [AppLanguage] = [.english]' in (root/'helpers/Localization.swift').read_text()
 assert 'Patches ativos • Restaurar anteriores' not in view
 assert 'PatchRecoveryView()' in view
-assert 'https://knzgen.up.railway.app/api/patches/external/catalog' in view
+assert 'RemotePatchAPI.fetchCatalog()' in view
+assert 'private func loadCatalog() async' in view
+assert 'request.httpBody = try JSONSerialization.data' in view
+assert 'URLSession.shared.data(for: request)' in view
 assert 'throw PatchPackageError.targetOccupied(' in (root/'helpers/PatchTransaction.swift').read_text()
 info=plistlib.loads((root/'Info.plist').read_bytes())
 assert info['CFBundleDisplayName']=='EXTERNAL CHEATS'
