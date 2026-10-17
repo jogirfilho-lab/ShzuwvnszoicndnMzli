@@ -1,7 +1,7 @@
 permissions:
   contents: write
 
-name: EXTERNAL CHEATS - English with API
+name: EXTERNAL - English with API
 on: [push, workflow_dispatch]
 jobs: 
   build: 
@@ -2229,6 +2229,11 @@ jobs:
           set -euo pipefail
           python3 scripts/apply_english_edition.py source/3105-1.1.1/ThreeOneOSFive
           python3 scripts/tests/test_english_edition.py source/3105-1.1.1/ThreeOneOSFive
+      - name: Remove calculator gate and set EXTERNAL app name
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_external_direct_login.py source/3105-1.1.1/ThreeOneOSFive
       - name: Build original archive and IPA
         shell: bash
         run: |
@@ -2252,10 +2257,10 @@ jobs:
           fi
           mkdir -p build/Payload
           cp -R "$APP" build/Payload/
-          (cd build && zip -qry "$GITHUB_WORKSPACE/dist/external-cheats-english.ipa" Payload)
+          (cd build && zip -qry "$GITHUB_WORKSPACE/dist/external-english.ipa" Payload)
           cp -R build/external-cheats-com-api.xcarchive dist/
-          test -s dist/external-cheats-english.ipa
+          test -s dist/external-english.ipa
       - uses: actions/upload-artifact@v4
         with:
-          name: external-cheats-english-with-api
-          path: dist/external-cheats-english.ipa
+          name: external-english-direct-key
+          path: dist/external-english.ipa
